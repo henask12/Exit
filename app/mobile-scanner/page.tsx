@@ -324,11 +324,29 @@ export default function MobileScanner() {
   const [scanResult, setScanResult] = useState<any>(null);
   const [cameraPermission, setCameraPermission] = useState<'prompt' | 'granted' | 'denied' | 'checking'>('checking');
   const [showPermissionPrompt, setShowPermissionPrompt] = useState(false);
+  const [notifications, setNotifications] = useState<Array<{id: string, type: 'success' | 'error' | 'warning' | 'info', message: string, details?: string}>>([]);
   
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const codeReaderRef = useRef<BrowserMultiFormatReader | null>(null);
   const scanningActiveRef = useRef<boolean>(false);
+
+  // Add notification
+  const addNotification = (type: 'success' | 'error' | 'warning' | 'info', message: string, details?: string) => {
+    const id = Date.now().toString() + Math.random().toString(36).substr(2, 9);
+    setNotifications(prev => [...prev, { id, type, message, details }]);
+    
+    // Auto-remove after 5 seconds for success/info, 8 seconds for error/warning
+    const timeout = type === 'error' || type === 'warning' ? 8000 : 5000;
+    setTimeout(() => {
+      setNotifications(prev => prev.filter(n => n.id !== id));
+    }, timeout);
+  };
+
+  // Remove notification
+  const removeNotification = (id: string) => {
+    setNotifications(prev => prev.filter(n => n.id !== id));
+  };
 
   // Get available flight numbers for the selected date
   const availableFlights = flights.filter(f => f.date === selectedDate);
@@ -430,10 +448,10 @@ export default function MobileScanner() {
           codeReaderRef.current = new BrowserMultiFormatReader();
         }
         
-        // Start scanning boarding pass barcodes automatically
+        // Start scanning boarding pass barcodes automatically after video is ready
         setTimeout(() => {
           startBoardingPassScanning();
-        }, 500); // Small delay to ensure video is ready
+        }, 1000); // Wait 1 second to ensure video is fully ready
       }
     } catch (error: any) {
       console.error('Error accessing camera:', error);
@@ -481,10 +499,10 @@ export default function MobileScanner() {
               codeReaderRef.current = new BrowserMultiFormatReader();
             }
             
-            // Start scanning boarding pass barcodes automatically
+            // Start scanning boarding pass barcodes automatically after video is ready
             setTimeout(() => {
               startBoardingPassScanning();
-            }, 500); // Small delay to ensure video is ready
+            }, 1000); // Wait 1 second to ensure video is fully ready
           }
           return;
         } catch (retryError) {
@@ -513,41 +531,111 @@ export default function MobileScanner() {
   // Start scanning boarding pass barcodes continuously
   const startBoardingPassScanning = async () => {
     if (!videoRef.current || !codeReaderRef.current || !isScanning) {
+      console.log('Cannot start scanning:', { 
+        hasVideo: !!videoRef.current, 
+        hasReader: !!codeReaderRef.current, 
+        isScanning 
+      });
       return;
     }
     
     const video = videoRef.current;
     const codeReader = codeReaderRef.current;
+    
+    // Wait for video to be ready
+    if (video.readyState < 2) {
+      // Wait for video metadata to load
+      await new Promise((resolve) => {
+        if (video.readyState >= 2) {
+          resolve(undefined);
+        } else {
+          video.addEventListener('loadedmetadata', () => resolve(undefined), { once: true });
+          // Timeout after 2 seconds
+          setTimeout(() => resolve(undefined), 2000);
+        }
+      });
+    }
+    
+    // Check video dimensions
+    if (video.videoWidth === 0 || video.videoHeight === 0) {
+      console.log('Video not ready, waiting...');
+      // Wait a bit more for video dimensions
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+    
+    if (video.videoWidth === 0 || video.videoHeight === 0) {
+      console.error('Video dimensions not available');
+      addNotification('error', 'Camera not ready', 'Video dimensions are not available. Please wait a moment and try again.');
+      return;
+    }
+    
     scanningActiveRef.current = true;
+    console.log('Starting scanning loop...', { 
+      videoWidth: video.videoWidth, 
+      videoHeight: video.videoHeight,
+      readyState: video.readyState 
+    });
+    addNotification('info', 'Scanning started', `Camera ready (${video.videoWidth}x${video.videoHeight}). Looking for boarding pass barcodes...`);
     
     // Continuous scanning loop
     const scanLoop = async () => {
-      while (scanningActiveRef.current && isScanning && !scanResult && streamRef.current) {
+      let scanCount = 0;
+      while (scanningActiveRef.current && isScanning && streamRef.current) {
+        // Skip if we have a scan result showing
+        if (scanResult) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+          continue;
+        }
+        
         try {
+          // Check video is still valid
+          if (!video || video.readyState < 2 || video.videoWidth === 0) {
+            await new Promise(resolve => setTimeout(resolve, 500));
+            continue;
+          }
+          
           // Try to decode barcode from video element
           const result = await codeReader.decodeFromVideoElement(video);
           
           if (result && result.getText()) {
             // Barcode detected!
+            console.log('Barcode detected:', result.getText());
             scanningActiveRef.current = false; // Stop scanning
             handleBoardingPassDetected(result.getText());
             return; // Exit loop
           }
         } catch (error) {
           // NotFoundException is normal (no barcode found) - continue scanning
-          if (!(error instanceof NotFoundException)) {
-            // Only log non-NotFoundException errors
-            // console.error('Decode error:', error);
+          if (error instanceof NotFoundException) {
+            // Normal - no barcode found, continue scanning
+            scanCount++;
+            if (scanCount % 50 === 0) {
+              // Log every 50 attempts to show it's working
+              console.log('Scanning... (attempt', scanCount, ')');
+            }
+          } else {
+            // Log other errors and show notification
+            console.error('Decode error:', error);
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            addNotification('error', 'Scanning error', `Error while scanning: ${errorMessage}. Scanning will continue...`);
           }
         }
         
         // Small delay before next scan attempt
-        await new Promise(resolve => setTimeout(resolve, 300));
+        await new Promise(resolve => setTimeout(resolve, 200));
+      }
+      
+      console.log('Scanning loop ended');
+      if (scanningActiveRef.current === false) {
+        addNotification('info', 'Scanning stopped', 'Barcode scanning has been stopped.');
       }
     };
     
     scanLoop().catch((err) => {
       console.error('Error in scanning loop:', err);
+      scanningActiveRef.current = false;
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      addNotification('error', 'Scanning failed', `Scanning loop encountered an error: ${errorMessage}`);
     });
   };
 
@@ -566,7 +654,8 @@ export default function MobileScanner() {
       pnr: '',
       class: '',
       sequence: '',
-      airline: ''
+      airline: '',
+      parseErrors: [] as string[]
     };
     
     try {
@@ -626,8 +715,15 @@ export default function MobileScanner() {
         });
       }
       
-    } catch (error) {
+      // Check if we successfully parsed any meaningful data
+      const hasData = parsed.passengerName || parsed.flightNumber || parsed.seat || parsed.pnr;
+      if (!hasData) {
+        parsed.parseErrors.push('Could not extract passenger name, flight number, seat, or PNR from barcode');
+      }
+      
+    } catch (error: any) {
       console.error('Error parsing boarding pass:', error);
+      parsed.parseErrors.push(`Parsing error: ${error.message || 'Unknown error'}`);
     }
     
     return parsed;
@@ -637,12 +733,49 @@ export default function MobileScanner() {
   const handleBoardingPassDetected = (barcodeText: string) => {
     // Scanning is already stopped when barcode is detected
     
+    // Show notification that barcode was detected
+    addNotification('success', 'Barcode detected!', `Raw data: ${barcodeText.substring(0, 50)}${barcodeText.length > 50 ? '...' : ''}`);
+    
     // Parse boarding pass data from barcode
     const boardingPassData = parseBoardingPass(barcodeText);
     const scanTime = new Date().toLocaleTimeString();
     
+    // Check for parsing errors
+    if (boardingPassData.parseErrors && boardingPassData.parseErrors.length > 0) {
+      const errorDetails = boardingPassData.parseErrors.join('; ');
+      addNotification(
+        'error', 
+        'Failed to parse boarding pass data', 
+        `Barcode was detected but parsing failed. Reasons: ${errorDetails}. Raw barcode: ${barcodeText}`
+      );
+    } else {
+      // Check if we got meaningful data
+      const hasData = boardingPassData.passengerName || boardingPassData.flightNumber || boardingPassData.seat;
+      if (!hasData) {
+        addNotification(
+          'warning',
+          'Limited data extracted',
+          `Barcode detected but could not extract passenger name, flight number, or seat. Raw data: ${barcodeText}`
+        );
+      } else {
+        addNotification('success', 'Boarding pass parsed successfully', 
+          `Extracted: ${boardingPassData.passengerName ? 'Name: ' + boardingPassData.passengerName + ', ' : ''}${boardingPassData.flightNumber ? 'Flight: ' + boardingPassData.flightNumber + ', ' : ''}${boardingPassData.seat ? 'Seat: ' + boardingPassData.seat : ''}`
+        );
+      }
+    }
+    
     // Try to find matching passenger in the list
     const passenger = findPassengerFromBarcode(barcodeText);
+    
+    if (passenger) {
+      if (passenger.status === 'verified') {
+        addNotification('warning', 'Passenger already verified', `${passenger.name} (Seat ${passenger.seat}) was already verified`);
+      } else {
+        addNotification('success', 'Passenger matched', `Found matching passenger: ${passenger.name} (Seat ${passenger.seat})`);
+      }
+    } else {
+      addNotification('warning', 'Passenger not found', 'Barcode detected but passenger not found in flight manifest');
+    }
     
     // Display the scanned boarding pass details
     setScanResult({
@@ -667,6 +800,7 @@ export default function MobileScanner() {
     setTimeout(() => {
       setScanResult(null);
       if (isScanning && streamRef.current) {
+        addNotification('info', 'Resuming scan...', 'Ready to scan next boarding pass');
         startBoardingPassScanning();
       }
     }, 3000);
@@ -776,7 +910,7 @@ export default function MobileScanner() {
     }
   };
 
-  // Ensure video plays when stream is set
+  // Ensure video plays when stream is set and start scanning when ready
   useEffect(() => {
     if (videoRef.current && streamRef.current && isScanning) {
       const video = videoRef.current;
@@ -785,7 +919,30 @@ export default function MobileScanner() {
           console.error('Error playing video in useEffect:', error);
         });
       }
+      
+      // Start scanning when video is ready
+      const handleVideoReady = () => {
+        if (video.readyState >= 2 && video.videoWidth > 0 && !scanningActiveRef.current) {
+          console.log('Video ready, starting scan...');
+          startBoardingPassScanning();
+        }
+      };
+      
+      if (video.readyState >= 2 && video.videoWidth > 0) {
+        // Video already ready
+        handleVideoReady();
+      } else {
+        // Wait for video to be ready
+        video.addEventListener('loadedmetadata', handleVideoReady, { once: true });
+        video.addEventListener('loadeddata', handleVideoReady, { once: true });
+      }
+      
+      return () => {
+        video.removeEventListener('loadedmetadata', handleVideoReady);
+        video.removeEventListener('loadeddata', handleVideoReady);
+      };
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isScanning]);
 
   // Start camera automatically when camera view opens, and cleanup on exit
@@ -817,6 +974,61 @@ export default function MobileScanner() {
   return (
     <div className="min-h-screen bg-[#1e3a5f] flex flex-col">
       <Header activeTab="mobile-scanner" />
+      
+      {/* Notifications */}
+      <div className="fixed top-20 right-4 z-50 space-y-2 max-w-sm w-full sm:max-w-md">
+        {notifications.map((notification) => {
+          const bgColor = 
+            notification.type === 'success' ? 'bg-green-500' :
+            notification.type === 'error' ? 'bg-red-500' :
+            notification.type === 'warning' ? 'bg-yellow-500' :
+            'bg-blue-500';
+          
+          const icon = 
+            notification.type === 'success' ? (
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+            ) : notification.type === 'error' ? (
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            ) : notification.type === 'warning' ? (
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+            ) : (
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            );
+          
+          return (
+            <div
+              key={notification.id}
+              className={`${bgColor} text-white rounded-lg shadow-lg p-4 animate-slide-in-right flex items-start gap-3`}
+            >
+              <div className="flex-shrink-0 mt-0.5">
+                {icon}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="font-semibold text-sm">{notification.message}</p>
+                {notification.details && (
+                  <p className="text-xs mt-1 opacity-90 break-words">{notification.details}</p>
+                )}
+              </div>
+              <button
+                onClick={() => removeNotification(notification.id)}
+                className="flex-shrink-0 text-white hover:text-gray-200 transition-colors"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+          );
+        })}
+      </div>
       
       <main className="flex-1 flex items-center justify-center px-2 sm:px-4 py-4 sm:py-8">
         <div className="bg-white rounded-xl sm:rounded-2xl shadow-2xl w-full max-w-md sm:max-w-lg md:max-w-2xl lg:max-w-4xl p-4 sm:p-6">
@@ -1032,6 +1244,16 @@ export default function MobileScanner() {
                       <div className="absolute top-2 right-2 sm:top-4 sm:right-4 w-8 h-8 sm:w-12 sm:h-12 border-t-2 sm:border-t-4 border-r-2 sm:border-r-4 border-white rounded-tr-lg z-10"></div>
                       <div className="absolute bottom-2 left-2 sm:bottom-4 sm:left-4 w-8 h-8 sm:w-12 sm:h-12 border-b-2 sm:border-b-4 border-l-2 sm:border-l-4 border-white rounded-bl-lg z-10"></div>
                       <div className="absolute bottom-2 right-2 sm:bottom-4 sm:right-4 w-8 h-8 sm:w-12 sm:h-12 border-b-2 sm:border-b-4 border-r-2 sm:border-r-4 border-white rounded-br-lg z-10"></div>
+                      
+                      {/* Scanning indicator */}
+                      {!scanResult && (
+                        <div className="absolute top-4 left-1/2 transform -translate-x-1/2 z-10">
+                          <div className="bg-red-500 text-white px-3 py-1 rounded-full text-xs font-semibold flex items-center gap-2 animate-pulse">
+                            <div className="w-2 h-2 bg-white rounded-full"></div>
+                            Scanning...
+                          </div>
+                        </div>
+                      )}
                     </>
                   )}
                   
