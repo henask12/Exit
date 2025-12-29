@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react';
 import Header from '../components/Header';
-import { BrowserMultiFormatReader, NotFoundException } from '@zxing/library';
+import { BrowserMultiFormatReader, NotFoundException, DecodeHintType, BarcodeFormat } from '@zxing/library';
 
 // Sample flights data
 const flights = [
@@ -448,9 +448,22 @@ export default function MobileScanner() {
         setCameraPermission('granted');
         setShowPermissionPrompt(false);
         
-        // Initialize barcode reader for boarding passes
+        // Initialize barcode reader for boarding passes with PDF417 support
         if (!codeReaderRef.current) {
-          codeReaderRef.current = new BrowserMultiFormatReader();
+          // Configure hints to prioritize PDF417 (boarding pass format)
+          const hints = new Map();
+          hints.set(DecodeHintType.POSSIBLE_FORMATS, [
+            BarcodeFormat.PDF_417,  // Most important for boarding passes
+            BarcodeFormat.AZTEC,
+            BarcodeFormat.DATA_MATRIX,
+            BarcodeFormat.QR_CODE,
+            BarcodeFormat.CODE_128,
+            BarcodeFormat.CODE_39
+          ]);
+          hints.set(DecodeHintType.TRY_HARDER, true);
+          hints.set(DecodeHintType.CHARACTER_SET, 'UTF-8');
+          
+          codeReaderRef.current = new BrowserMultiFormatReader(hints);
         }
         
         // Start scanning boarding pass barcodes automatically after video is ready
@@ -504,9 +517,22 @@ export default function MobileScanner() {
             setCameraPermission('granted');
             setShowPermissionPrompt(false);
             
-            // Initialize barcode reader for boarding passes
+            // Initialize barcode reader for boarding passes with PDF417 support
             if (!codeReaderRef.current) {
-              codeReaderRef.current = new BrowserMultiFormatReader();
+              // Configure hints to prioritize PDF417 (boarding pass format)
+              const hints = new Map();
+              hints.set(DecodeHintType.POSSIBLE_FORMATS, [
+                BarcodeFormat.PDF_417,  // Most important for boarding passes
+                BarcodeFormat.AZTEC,
+                BarcodeFormat.DATA_MATRIX,
+                BarcodeFormat.QR_CODE,
+                BarcodeFormat.CODE_128,
+                BarcodeFormat.CODE_39
+              ]);
+              hints.set(DecodeHintType.TRY_HARDER, true);
+              hints.set(DecodeHintType.CHARACTER_SET, 'UTF-8');
+              
+              codeReaderRef.current = new BrowserMultiFormatReader(hints);
             }
             
             // Start scanning boarding pass barcodes automatically after video is ready
