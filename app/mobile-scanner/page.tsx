@@ -2,9 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react';
 import Header from '../components/Header';
-import { CameraEnhancer } from "dynamsoft-camera-enhancer";
-import { BarcodeReader, TextResult } from "dynamsoft-javascript-barcode";
-import type { PlayCallbackInfo } from "dynamsoft-camera-enhancer/dist/types/interface/playcallbackinfo";
+import { BrowserMultiFormatReader } from '@zxing/browser';
 
 // Sample flights data
 const flights = [
@@ -328,123 +326,30 @@ export default function MobileScanner() {
   const [showPermissionPrompt, setShowPermissionPrompt] = useState(false);
   const [notifications, setNotifications] = useState<Array<{id: string, type: 'success' | 'error' | 'warning' | 'info', message: string, details?: string}>>([]);
   
-  const mounted = useRef(false);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const enhancerRef = useRef<CameraEnhancer | null>(null);
-  const codeReaderRef = useRef<BarcodeReader | null>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const codeReaderRef = useRef<BrowserMultiFormatReader | null>(null);
   const scanningActiveRef = useRef<boolean>(false);
-  const intervalRef = useRef<any>(null);
-  const decodingRef = useRef<boolean>(false);
+  const streamRef = useRef<MediaStream | null>(null);
   
-  // Initialize Dynamsoft BarcodeReader - same approach as NextJS-Barcode-Scanner
+  // Initialize ZXing BarcodeReader
   useEffect(() => {
-    const init = async () => {
-      if (mounted.current === false) {
-        try {
-          const licenseKey = 'DLS2eyJoYW5kc2hha2VDb2RlIjoiMTA0OTkyMzAwLU1UQTBPVGt5TXpBd0xYZGxZaTFVY21saGJGQnliMm8iLCJtYWluU2VydmVyVVJMIjoiaHR0cHM6Ly9tZGxzLmR5bmFtc29mdG9ubGluZS5jb20iLCJvcmdhbml6YXRpb25JRCI6IjEwNDk5MjMwMCIsInN0YW5kYnlTZXJ2ZXJVUkwiOiJodHRwczovL3NkbHMuZHluYW1zb2Z0b25saW5lLmNvbSIsImNoZWNrQ29kZSI6MTYwOTU4NzI4OH0=';
-          
-          // Set license BEFORE createInstance - exactly like NextJS-Barcode-Scanner
-          // CRITICAL: License must be set BEFORE createInstance or loadWasm
-          // Check if WASM is not loaded - if it is, license should already be set
-          if (BarcodeReader.isWasmLoaded() === false) {
-            // Set license and engine path BEFORE any createInstance call
-            BarcodeReader.license = licenseKey;
-            BarcodeReader.engineResourcePath = "@"; // Use local node_modules like NextJS-Barcode-Scanner
-            console.log('License and engine path set');
-          } else {
-            // WASM already loaded - license should be set, but ensure engine path is set
-            if (!BarcodeReader.engineResourcePath || BarcodeReader.engineResourcePath !== "@") {
-              BarcodeReader.engineResourcePath = "@";
-            }
-            console.log('WASM already loaded, skipping license set');
-          }
-          
-          // Only create instance if we don't already have one
-          // This ensures license is set before createInstance
-          if (!codeReaderRef.current) {
-            // Initialize BarcodeReader AFTER license is set
-            codeReaderRef.current = await BarcodeReader.createInstance();
-            
-            // Configure to prioritize PDF417 (boarding pass format)
-            try {
-              const settings = await codeReaderRef.current.getRuntimeSettings();
-              const { EnumBarcodeFormat } = await import('dynamsoft-javascript-barcode');
-              
-              if (EnumBarcodeFormat) {
-                settings.barcodeFormatIds = EnumBarcodeFormat.BF_PDF417 | 
-                                            EnumBarcodeFormat.BF_QR_CODE | 
-                                            EnumBarcodeFormat.BF_DATAMATRIX | 
-                                            EnumBarcodeFormat.BF_AZTEC;
-              }
-              
-              // PDF417 settings may not be in type definition but can be set
-              if ((settings as any).pdf417Settings) {
-                (settings as any).pdf417Settings = (settings as any).pdf417Settings || {};
-                if ((settings as any).pdf417Settings.scanStep !== undefined) {
-                  (settings as any).pdf417Settings.scanStep = 2;
-                }
-              }
-              
-              if (settings.expectedBarcodesCount !== undefined) {
-                settings.expectedBarcodesCount = 1;
-              }
-              
-              await codeReaderRef.current.updateRuntimeSettings(settings);
-              console.log('Barcode reader configured for PDF417');
-            } catch (configError) {
-              console.warn('Could not configure barcode reader settings:', configError);
-            }
-          }
-          
-          console.log('Dynamsoft SDK loaded');
-        } catch (error) {
-          console.error('Error loading Dynamsoft SDK:', error);
-          addNotification('error', 'Initialization error', error instanceof Error ? error.message : 'Failed to initialize scanner');
-        }
-      }
-      mounted.current = true;
-    };
+    if (!codeReaderRef.current) {
+      codeReaderRef.current = new BrowserMultiFormatReader();
+      console.log('ZXing barcode reader initialized');
+    }
     
-    init();
+    return () => {
+      // Cleanup on unmount
+      if (codeReaderRef.current) {
+        try {
+          (codeReaderRef.current as any).reset();
+        } catch (e) {
+          // Ignore cleanup errors
+        }
+        codeReaderRef.current = null;
+      }
+    };
   }, []);
-
-  // Initialize CameraEnhancer when container is available (when camera view is shown)
-  useEffect(() => {
-    const initCameraEnhancer = async () => {
-      // Only initialize if we're in camera view and container is available
-      if (currentView === 'camera' && containerRef.current && !enhancerRef.current) {
-        try {
-          enhancerRef.current = await CameraEnhancer.createInstance();
-          await enhancerRef.current.setUIElement(containerRef.current);
-          enhancerRef.current.setVideoFit("cover");
-          
-          enhancerRef.current.on("played", (playCallbackInfo: PlayCallbackInfo) => {
-            setIsScanning(true);
-            setCameraPermission('granted');
-            setShowPermissionPrompt(false);
-            startBoardingPassScanning();
-          });
-          
-          enhancerRef.current.on("cameraClose", () => {
-            setIsScanning(false);
-          });
-          
-          console.log('CameraEnhancer initialized');
-        } catch (error) {
-          console.error('Error initializing CameraEnhancer:', error);
-          const errorMessage = error instanceof Error ? error.message : String(error);
-          addNotification('error', 'Camera initialization error', `Failed to initialize camera: ${errorMessage}`);
-        }
-      }
-    };
-    
-    // Small delay to ensure container is rendered
-    const timer = setTimeout(() => {
-      initCameraEnhancer();
-    }, 100);
-    
-    return () => clearTimeout(timer);
-  }, [currentView]); // Re-run when view changes to camera
 
   // Add notification
   const addNotification = (type: 'success' | 'error' | 'warning' | 'info', message: string, details?: string) => {
@@ -483,7 +388,7 @@ export default function MobileScanner() {
             if (newState === 'granted') {
               setShowPermissionPrompt(false);
               // If we're in camera view and camera isn't running, start it automatically
-              if (currentView === 'camera' && !isScanning && !enhancerRef.current) {
+              if (currentView === 'camera' && !isScanning && !streamRef.current) {
                 startCamera();
               }
             }
@@ -516,54 +421,63 @@ export default function MobileScanner() {
     }
   };
 
-  // Start camera - using CameraEnhancer like NextJS-Barcode-Scanner
+  // Start camera - using ZXing
   const startCamera = async () => {
     try {
-      // Wait for CameraEnhancer to be initialized if not ready
-      if (!enhancerRef.current) {
-        if (!containerRef.current) {
-          addNotification('error', 'Camera not ready', 'Please wait for camera to initialize');
-          return;
+      if (!videoRef.current || !codeReaderRef.current) {
+        addNotification('error', 'Camera not ready', 'Please wait for camera to initialize');
+        return;
+      }
+
+      // Check if we're in a secure context (HTTPS or localhost)
+      if (!window.isSecureContext) {
+        alert('Camera access requires HTTPS. Please access this site using https:// or use localhost for development.');
+        return;
+      }
+
+      // Request camera access
+      const constraints: MediaStreamConstraints = {
+        video: {
+          facingMode: { ideal: 'environment' }, // Prefer back camera on mobile
+        }
+      };
+
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      streamRef.current = stream;
+      
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.setAttribute('playsinline', 'true');
+        videoRef.current.setAttribute('webkit-playsinline', 'true');
+        videoRef.current.muted = true;
+        
+        try {
+          if (videoRef.current.paused) {
+            await videoRef.current.play();
+          }
+        } catch (playError: any) {
+          if (playError.name !== 'NotAllowedError' && !playError.message?.includes('already playing')) {
+            console.error('Error playing video:', playError);
+          }
         }
         
-        // Try to initialize if container is ready
-        enhancerRef.current = await CameraEnhancer.createInstance();
-        await enhancerRef.current.setUIElement(containerRef.current);
-        enhancerRef.current.setVideoFit("cover");
+        setIsScanning(true);
+        setCameraPermission('granted');
+        setShowPermissionPrompt(false);
         
-        enhancerRef.current.on("played", (playCallbackInfo: PlayCallbackInfo) => {
-          setIsScanning(true);
-          setCameraPermission('granted');
-          setShowPermissionPrompt(false);
+        // Start scanning after video is ready
+        setTimeout(() => {
           startBoardingPassScanning();
-        });
-        
-        enhancerRef.current.on("cameraClose", () => {
-          setIsScanning(false);
-        });
-      }
-      
-      // Open camera
-      if (enhancerRef.current) {
-        await enhancerRef.current.open(true);
-      } else {
-        throw new Error('CameraEnhancer not initialized');
+        }, 1000);
       }
     } catch (error: any) {
       console.error('Error accessing camera:', error);
       
-      // Provide more detailed error information
-      const errorMessage = error?.message || error?.toString() || 'Unknown error';
-      console.error('Camera error details:', {
-        name: error?.name,
-        message: errorMessage,
-        stack: error?.stack
-      });
-      
-      if (error?.name === 'NotAllowedError' || error?.name === 'PermissionDeniedError') {
+      if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
         setCameraPermission('denied');
         setShowPermissionPrompt(true);
       } else {
+        const errorMessage = error?.message || error?.toString() || 'Unknown error';
         addNotification('error', 'Camera error', `Failed to start camera: ${errorMessage}`);
       }
     }
@@ -575,10 +489,10 @@ export default function MobileScanner() {
     await startCamera();
   };
 
-  // Start scanning boarding pass barcodes - using CameraEnhancer like NextJS-Barcode-Scanner
-  const startBoardingPassScanning = () => {
-    if (!codeReaderRef.current || !enhancerRef.current) {
-      console.log('Cannot start scanning - missing reader or enhancer');
+  // Start scanning boarding pass barcodes - using ZXing
+  const startBoardingPassScanning = async () => {
+    if (!codeReaderRef.current || !videoRef.current || !streamRef.current) {
+      console.log('Cannot start scanning - missing reader, video, or stream');
       return;
     }
     
@@ -587,52 +501,64 @@ export default function MobileScanner() {
       return;
     }
     
+    // Wait for video to be ready
+    let retries = 0;
+    const maxRetries = 10;
+    
+    while ((videoRef.current.readyState < 2 || videoRef.current.videoWidth === 0 || videoRef.current.videoHeight === 0) && retries < maxRetries) {
+      await new Promise(resolve => setTimeout(resolve, 200));
+      retries++;
+    }
+    
+    if (videoRef.current.videoWidth === 0 || videoRef.current.videoHeight === 0) {
+      addNotification('error', 'Camera not ready', 'Video dimensions are not available. Please ensure camera is working.');
+      return;
+    }
+    
     scanningActiveRef.current = true;
     addNotification('info', 'Scanning started', 'Looking for boarding pass barcodes...');
     
-    // Start scanning loop - same approach as NextJS-Barcode-Scanner
-    const startScanning = () => {
-      const decode = async () => {
-        if (decodingRef.current === false && codeReaderRef.current && enhancerRef.current) {
-          decodingRef.current = true;
-          try {
-            // Use enhancer.getFrame() - same as NextJS-Barcode-Scanner
-            const results = await codeReaderRef.current.decode(enhancerRef.current.getFrame());
-            
-            if (results && Array.isArray(results) && results.length > 0) {
-              const barcodeText = results[0].barcodeText;
-              if (barcodeText) {
-                scanningActiveRef.current = false;
-                stopScanning();
-                handleBoardingPassDetected(barcodeText);
-                return;
-              }
-            }
-          } catch (error) {
-            // Ignore "no barcode found" errors
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            if (!errorMessage.includes('No barcode') && !errorMessage.includes('not found')) {
-              console.error('Decode error:', error);
+    // Use ZXing's decodeFromVideoDevice which handles continuous scanning
+    try {
+      codeReaderRef.current.decodeFromVideoDevice(
+        undefined, // Use default camera
+        videoRef.current,
+        (result, error) => {
+          if (result) {
+            const barcodeText = result.getText();
+            if (barcodeText && scanningActiveRef.current) {
+              scanningActiveRef.current = false;
+              (codeReaderRef.current as any)?.reset();
+              handleBoardingPassDetected(barcodeText);
             }
           }
-          decodingRef.current = false;
+          if (error && !error.message?.includes('No barcode') && !error.message?.includes('not found')) {
+            // Only log non-common errors
+            console.error('ZXing decode error:', error);
+          }
         }
-      };
-      
-      // Use 40ms interval like NextJS-Barcode-Scanner
-      intervalRef.current = setInterval(decode, 40);
-    };
-    
-    startScanning();
+      ).catch((err) => {
+        console.error('Error in decodeFromVideoDevice:', err);
+        scanningActiveRef.current = false;
+      });
+    } catch (error) {
+      console.error('Error starting ZXing scanner:', error);
+      scanningActiveRef.current = false;
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      addNotification('error', 'Scanning error', `Failed to start scanner: ${errorMessage}`);
+    }
   };
   
   // Stop scanning
   const stopScanning = () => {
-    if (intervalRef.current) {
-      clearInterval(intervalRef.current);
-      intervalRef.current = null;
-    }
     scanningActiveRef.current = false;
+    if (codeReaderRef.current) {
+      try {
+        (codeReaderRef.current as any).reset();
+      } catch (e) {
+        // Ignore reset errors
+      }
+    }
   };
 
   // Parse boarding pass barcode data (IATA format)
@@ -795,7 +721,7 @@ export default function MobileScanner() {
     // Resume scanning after 3 seconds (longer to read the details)
     setTimeout(() => {
       setScanResult(null);
-      if (enhancerRef.current && isScanning) {
+      if (streamRef.current && isScanning && videoRef.current) {
         addNotification('info', 'Resuming scan...', 'Ready to scan next boarding pass');
         startBoardingPassScanning();
       }
@@ -834,9 +760,9 @@ export default function MobileScanner() {
     return passenger;
   };
 
-  // Capture and scan from image (fallback method) - using CameraEnhancer
+  // Capture and scan from image (fallback method) - using ZXing
   const captureAndScan = async () => {
-    if (!codeReaderRef.current || !enhancerRef.current) {
+    if (!codeReaderRef.current || !videoRef.current || !streamRef.current) {
       addNotification('error', 'Camera not ready', 'Please ensure camera is started before capturing');
       return;
     }
@@ -846,13 +772,27 @@ export default function MobileScanner() {
     stopScanning();
     
     try {
-      addNotification('info', 'Capturing...', 'Analyzing captured image for PDF417 barcode...');
+      addNotification('info', 'Capturing...', 'Analyzing captured image for barcode...');
       
-      // Use enhancer.getFrame() - same as NextJS-Barcode-Scanner
-      const results = await codeReaderRef.current.decode(enhancerRef.current.getFrame());
+      // Create canvas to capture current frame
+      const canvas = document.createElement('canvas');
+      canvas.width = videoRef.current.videoWidth;
+      canvas.height = videoRef.current.videoHeight;
+      const ctx = canvas.getContext('2d');
       
-      if (results && Array.isArray(results) && results.length > 0) {
-        const barcodeText = results[0].barcodeText;
+      if (!ctx) {
+        addNotification('error', 'Capture failed', 'Could not create canvas context');
+        return;
+      }
+      
+      // Draw current video frame to canvas
+      ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
+      
+      // Use ZXing to decode from canvas
+      const result = await codeReaderRef.current.decodeFromCanvas(canvas);
+      
+      if (result) {
+        const barcodeText = result.getText();
         if (barcodeText) {
           console.log('Barcode detected from capture:', barcodeText);
           handleBoardingPassDetected(barcodeText);
@@ -862,7 +802,7 @@ export default function MobileScanner() {
       
       addNotification('warning', 'No barcode found', 'Could not detect a barcode in the captured image. Please try again.');
       // Resume continuous scanning if it was active
-      if (wasScanning && enhancerRef.current) {
+      if (wasScanning && streamRef.current && videoRef.current) {
         setTimeout(() => {
           startBoardingPassScanning();
         }, 500);
@@ -876,7 +816,7 @@ export default function MobileScanner() {
         addNotification('error', 'Scan failed', `Error while scanning captured image: ${errorMessage}`);
       }
       // Resume continuous scanning if it was active
-      if (wasScanning && enhancerRef.current) {
+      if (wasScanning && streamRef.current && videoRef.current) {
         setTimeout(() => {
           startBoardingPassScanning();
         }, 500);
@@ -884,11 +824,22 @@ export default function MobileScanner() {
     }
   };
 
-  // Stop camera - using CameraEnhancer like NextJS-Barcode-Scanner
+  // Stop camera - using ZXing
   const stopCamera = () => {
     stopScanning();
-    if (enhancerRef.current) {
-      enhancerRef.current.close();
+    if (codeReaderRef.current) {
+      try {
+        (codeReaderRef.current as any).reset();
+      } catch (e) {
+        // Ignore reset errors
+      }
+    }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
     }
     setIsScanning(false);
   };
@@ -945,7 +896,7 @@ export default function MobileScanner() {
   useEffect(() => {
     if (currentView === 'camera') {
       // Always try to start camera when entering camera view
-      if (!isScanning && !enhancerRef.current) {
+      if (!isScanning && !streamRef.current) {
         startCamera().catch(() => {
           // If camera fails to start, show permission prompt if needed
           if (cameraPermission === 'denied' || cameraPermission === 'prompt') {
@@ -1213,15 +1164,27 @@ export default function MobileScanner() {
                 </div>
               </div>
 
-              {/* Camera Scanner Frame - using CameraEnhancer like NextJS-Barcode-Scanner */}
+              {/* Camera Scanner Frame - using ZXing */}
               <div className="relative mb-4 sm:mb-6">
-                <div 
-                  ref={containerRef}
-                  className="bg-gray-900 rounded-lg overflow-hidden aspect-square flex items-center justify-center relative min-h-[250px] sm:min-h-[300px] md:min-h-[400px]"
-                  style={{ position: "relative", width: "100%", height: "100%" }}
-                >
-                  {/* CameraEnhancer will inject video here */}
-                  <div className="dce-video-container"></div>
+                <div className="bg-gray-900 rounded-lg overflow-hidden aspect-square flex items-center justify-center relative min-h-[250px] sm:min-h-[300px] md:min-h-[400px]">
+                  {/* Video element */}
+                  <video
+                    ref={videoRef}
+                    autoPlay
+                    playsInline
+                    muted
+                    className={`w-full h-full object-cover absolute inset-0 z-0 ${isScanning ? 'block' : 'hidden'}`}
+                    onLoadedMetadata={(e) => {
+                      const video = e.currentTarget;
+                      if (video.paused) {
+                        video.play().catch((error: any) => {
+                          if (error.name !== 'NotAllowedError' && !error.message?.includes('already playing')) {
+                            console.error('Error playing video:', error);
+                          }
+                        });
+                      }
+                    }}
+                  />
                   
                   {/* Corner markers - white brackets */}
                   {isScanning && (
@@ -1382,7 +1345,7 @@ export default function MobileScanner() {
                       scanningActiveRef.current = false;
                       addNotification('info', 'Scanning reset', 'Resetting scanner. Please wait...');
                       setTimeout(() => {
-                        if (enhancerRef.current && codeReaderRef.current) {
+                        if (streamRef.current && videoRef.current && codeReaderRef.current) {
                           startBoardingPassScanning();
                         }
                       }, 1000);
