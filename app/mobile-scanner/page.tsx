@@ -346,6 +346,10 @@ export default function MobileScanner() {
             setCameraPermission(newState);
             if (newState === 'granted') {
               setShowPermissionPrompt(false);
+              // If we're in camera view and camera isn't running, start it automatically
+              if (currentView === 'camera' && !isScanning && !streamRef.current) {
+                startCamera();
+              }
             }
           };
         } catch (permError) {
@@ -527,10 +531,15 @@ export default function MobileScanner() {
   // Start camera automatically when camera view opens, and cleanup on exit
   useEffect(() => {
     if (currentView === 'camera') {
-      if (cameraPermission === 'granted' && !isScanning && !streamRef.current) {
-        startCamera();
-      } else if (cameraPermission === 'denied' || cameraPermission === 'prompt') {
-        setShowPermissionPrompt(true);
+      // Always try to start camera when entering camera view
+      // Browser will handle permission prompting if needed
+      if (!isScanning && !streamRef.current) {
+        startCamera().catch(() => {
+          // If camera fails to start, show permission prompt if needed
+          if (cameraPermission === 'denied' || cameraPermission === 'prompt') {
+            setShowPermissionPrompt(true);
+          }
+        });
       }
     }
     
@@ -540,7 +549,7 @@ export default function MobileScanner() {
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentView, cameraPermission]);
+  }, [currentView]);
 
   // Get selected flight details
   const flightDetails = flights.find(f => f.flight === selectedFlight);
