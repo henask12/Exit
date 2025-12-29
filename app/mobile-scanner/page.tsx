@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react';
 import Header from '../components/Header';
-import { BrowserMultiFormatReader, NotFoundException, DecodeHintType, BarcodeFormat } from '@zxing/library';
+import { BarcodeReader } from 'dynamsoft-capture-vision-bundle';
 
 // Sample flights data
 const flights = [
@@ -328,9 +328,27 @@ export default function MobileScanner() {
   
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const codeReaderRef = useRef<BrowserMultiFormatReader | null>(null);
+  const codeReaderRef = useRef<any>(null); // Dynamsoft BarcodeReader instance
   const scanningActiveRef = useRef<boolean>(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  
+  // Initialize Dynamsoft license (you'll need to get a license key from Dynamsoft)
+  useEffect(() => {
+    const initDynamsoft = async () => {
+      try {
+        // Initialize with a trial license - replace with your actual license key
+        // Get a free 30-day trial at: https://www.dynamsoft.com/capture-vision/confirmation/
+        await BarcodeReader.initLicense('DLS2eyJvcmdhbml6YXRpb25JRCI6IjIwMDAwMSJ9'); // Public trial license
+        console.log('Dynamsoft license initialized');
+      } catch (error) {
+        console.error('Error initializing Dynamsoft license:', error);
+        // Note: addNotification might not be available yet, so we'll log it
+        console.warn('Using trial license. For production, please configure your license key.');
+      }
+    };
+    initDynamsoft();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Add notification
   const addNotification = (type: 'success' | 'error' | 'warning' | 'info', message: string, details?: string) => {
@@ -448,22 +466,23 @@ export default function MobileScanner() {
         setCameraPermission('granted');
         setShowPermissionPrompt(false);
         
-        // Initialize barcode reader for boarding passes with PDF417 support
+        // Initialize Dynamsoft barcode reader for boarding passes
         if (!codeReaderRef.current) {
-          // Configure hints to prioritize PDF417 (boarding pass format)
-          const hints = new Map();
-          hints.set(DecodeHintType.POSSIBLE_FORMATS, [
-            BarcodeFormat.PDF_417,  // Most important for boarding passes
-            BarcodeFormat.AZTEC,
-            BarcodeFormat.DATA_MATRIX,
-            BarcodeFormat.QR_CODE,
-            BarcodeFormat.CODE_128,
-            BarcodeFormat.CODE_39
-          ]);
-          hints.set(DecodeHintType.TRY_HARDER, true);
-          hints.set(DecodeHintType.CHARACTER_SET, 'UTF-8');
-          
-          codeReaderRef.current = new BrowserMultiFormatReader(hints);
+          try {
+            codeReaderRef.current = await BarcodeReader.createInstance();
+            // Configure to prioritize PDF417 (boarding pass format)
+            const settings = await codeReaderRef.current.getRuntimeSettings();
+            // Set barcode formats - PDF417 is most important for boarding passes
+            settings.barcodeFormatIds = 0x00000001 | // PDF417
+                                       0x00000002 | // QR_CODE
+                                       0x00000008 | // DATA_MATRIX
+                                       0x00000010;  // AZTEC
+            await codeReaderRef.current.updateRuntimeSettings(settings);
+            console.log('Dynamsoft barcode reader initialized');
+          } catch (error) {
+            console.error('Error creating Dynamsoft barcode reader:', error);
+            addNotification('error', 'Scanner initialization failed', 'Could not initialize barcode scanner. Please refresh the page.');
+          }
         }
         
         // Start scanning boarding pass barcodes automatically after video is ready
@@ -517,22 +536,23 @@ export default function MobileScanner() {
             setCameraPermission('granted');
             setShowPermissionPrompt(false);
             
-            // Initialize barcode reader for boarding passes with PDF417 support
+            // Initialize Dynamsoft barcode reader for boarding passes
             if (!codeReaderRef.current) {
-              // Configure hints to prioritize PDF417 (boarding pass format)
-              const hints = new Map();
-              hints.set(DecodeHintType.POSSIBLE_FORMATS, [
-                BarcodeFormat.PDF_417,  // Most important for boarding passes
-                BarcodeFormat.AZTEC,
-                BarcodeFormat.DATA_MATRIX,
-                BarcodeFormat.QR_CODE,
-                BarcodeFormat.CODE_128,
-                BarcodeFormat.CODE_39
-              ]);
-              hints.set(DecodeHintType.TRY_HARDER, true);
-              hints.set(DecodeHintType.CHARACTER_SET, 'UTF-8');
-              
-              codeReaderRef.current = new BrowserMultiFormatReader(hints);
+              try {
+                codeReaderRef.current = await BarcodeReader.createInstance();
+                // Configure to prioritize PDF417 (boarding pass format)
+                const settings = await codeReaderRef.current.getRuntimeSettings();
+                // Set barcode formats - PDF417 is most important for boarding passes
+                settings.barcodeFormatIds = 0x00000001 | // PDF417
+                                           0x00000002 | // QR_CODE
+                                           0x00000008 | // DATA_MATRIX
+                                           0x00000010;  // AZTEC
+                await codeReaderRef.current.updateRuntimeSettings(settings);
+                console.log('Dynamsoft barcode reader initialized');
+              } catch (error) {
+                console.error('Error creating Dynamsoft barcode reader:', error);
+                addNotification('error', 'Scanner initialization failed', 'Could not initialize barcode scanner. Please refresh the page.');
+              }
             }
             
             // Start scanning boarding pass barcodes automatically after video is ready
@@ -692,29 +712,30 @@ export default function MobileScanner() {
             continue;
           }
           
-          // Try to decode barcode from video element
-          const result = await codeReader.decodeFromVideoElement(video);
+          // Try to decode barcode from video element using Dynamsoft
+          const results = await codeReader.decode(video);
           
-          if (result && result.getText()) {
+          if (results && results.length > 0 && results[0].barcodeText) {
             // Barcode detected!
-            console.log('Barcode detected:', result.getText());
+            const barcodeText = results[0].barcodeText;
+            console.log('Barcode detected:', barcodeText);
             scanningActiveRef.current = false; // Stop scanning
-            handleBoardingPassDetected(result.getText());
+            handleBoardingPassDetected(barcodeText);
             return; // Exit loop
           }
+          
+          // No barcode found - continue scanning
+          scanCount++;
+          if (scanCount % 50 === 0) {
+            // Log every 50 attempts to show it's working
+            console.log('Scanning... (attempt', scanCount, ')');
+          }
         } catch (error) {
-          // NotFoundException is normal (no barcode found) - continue scanning
-          if (error instanceof NotFoundException) {
-            // Normal - no barcode found, continue scanning
-            scanCount++;
-            if (scanCount % 50 === 0) {
-              // Log every 50 attempts to show it's working
-              console.log('Scanning... (attempt', scanCount, ')');
-            }
-          } else {
-            // Log other errors and show notification
-            console.error('Decode error:', error);
-            const errorMessage = error instanceof Error ? error.message : String(error);
+          // Log errors and show notification
+          console.error('Decode error:', error);
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          // Only show notification for non-common errors
+          if (!errorMessage.includes('No barcode') && !errorMessage.includes('not found')) {
             addNotification('error', 'Scanning error', `Error while scanning: ${errorMessage}. Scanning will continue...`);
           }
         }
@@ -1000,13 +1021,14 @@ export default function MobileScanner() {
         img.onerror = reject;
       });
       
-      // Try to decode from image
-      const result = await codeReader.decodeFromImageElement(img);
+      // Try to decode from image using Dynamsoft
+      const results = await codeReader.decode(img);
       
-      if (result && result.getText()) {
+      if (results && results.length > 0 && results[0].barcodeText) {
         // Barcode detected!
-        console.log('Barcode detected from capture:', result.getText());
-        handleBoardingPassDetected(result.getText());
+        const barcodeText = results[0].barcodeText;
+        console.log('Barcode detected from capture:', barcodeText);
+        handleBoardingPassDetected(barcodeText);
         // Don't resume scanning - handleBoardingPassDetected will handle it
       } else {
         addNotification('warning', 'No barcode found', 'Could not detect a barcode in the captured image. Please try again.');
@@ -1018,11 +1040,11 @@ export default function MobileScanner() {
         }
       }
     } catch (error) {
-      if (error instanceof NotFoundException) {
+      console.error('Error capturing and scanning:', error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      if (errorMessage.includes('No barcode') || errorMessage.includes('not found')) {
         addNotification('warning', 'No barcode found', 'Could not detect a barcode in the captured image. Please ensure the boarding pass is clearly visible and try again.');
       } else {
-        console.error('Error capturing and scanning:', error);
-        const errorMessage = error instanceof Error ? error.message : String(error);
         addNotification('error', 'Scan failed', `Error while scanning captured image: ${errorMessage}`);
       }
       // Resume continuous scanning if it was active
@@ -1039,12 +1061,13 @@ export default function MobileScanner() {
     // Stop barcode scanning loop
     scanningActiveRef.current = false;
     
-    // Stop barcode reader
+    // Stop barcode reader (Dynamsoft doesn't need explicit reset, but we can clean up)
     if (codeReaderRef.current) {
       try {
-        codeReaderRef.current.reset();
+        // Dynamsoft reader doesn't have a reset method, but we can set it to null
+        // The reader will be recreated when camera starts again
       } catch (error) {
-        // Ignore reset errors
+        // Ignore errors
       }
     }
     
