@@ -335,7 +335,7 @@ export default function MobileScanner() {
   const intervalRef = useRef<any>(null);
   const decodingRef = useRef<boolean>(false);
   
-  // Initialize Dynamsoft license - same approach as NextJS-Barcode-Scanner
+  // Initialize Dynamsoft BarcodeReader - same approach as NextJS-Barcode-Scanner
   useEffect(() => {
     const initDynamsoft = async () => {
       try {
@@ -345,13 +345,89 @@ export default function MobileScanner() {
           BarcodeReader.license = licenseKey;
           BarcodeReader.engineResourcePath = "@"; // Use local node_modules like NextJS-Barcode-Scanner
         }
+        
+        // Initialize BarcodeReader
+        codeReaderRef.current = await BarcodeReader.createInstance();
+        
+        // Configure to prioritize PDF417 (boarding pass format)
+        try {
+          const settings = await codeReaderRef.current.getRuntimeSettings();
+          const { EnumBarcodeFormat } = await import('dynamsoft-javascript-barcode');
+          
+          if (EnumBarcodeFormat) {
+            settings.barcodeFormatIds = EnumBarcodeFormat.BF_PDF417 | 
+                                        EnumBarcodeFormat.BF_QR_CODE | 
+                                        EnumBarcodeFormat.BF_DATAMATRIX | 
+                                        EnumBarcodeFormat.BF_AZTEC;
+          }
+          
+          // PDF417 settings may not be in type definition but can be set
+          if ((settings as any).pdf417Settings) {
+            (settings as any).pdf417Settings = (settings as any).pdf417Settings || {};
+            if ((settings as any).pdf417Settings.scanStep !== undefined) {
+              (settings as any).pdf417Settings.scanStep = 2;
+            }
+          }
+          
+          if (settings.expectedBarcodesCount !== undefined) {
+            settings.expectedBarcodesCount = 1;
+          }
+          
+          await codeReaderRef.current.updateRuntimeSettings(settings);
+          console.log('Barcode reader configured for PDF417');
+        } catch (configError) {
+          console.warn('Could not configure barcode reader settings:', configError);
+        }
+        
         console.log('Dynamsoft SDK loaded');
       } catch (error) {
         console.error('Error loading Dynamsoft SDK:', error);
+        addNotification('error', 'Initialization error', error instanceof Error ? error.message : 'Failed to initialize scanner');
       }
     };
+    
     initDynamsoft();
   }, []);
+
+  // Initialize CameraEnhancer when container is ready
+  useEffect(() => {
+    const initCameraEnhancer = async () => {
+      if (containerRef.current && !enhancerRef.current) {
+        try {
+          enhancerRef.current = await CameraEnhancer.createInstance();
+          await enhancerRef.current.setUIElement(containerRef.current);
+          enhancerRef.current.setVideoFit("cover");
+          
+          enhancerRef.current.on("played", (playCallbackInfo: PlayCallbackInfo) => {
+            setIsScanning(true);
+            setCameraPermission('granted');
+            setShowPermissionPrompt(false);
+            startBoardingPassScanning();
+          });
+          
+          enhancerRef.current.on("cameraClose", () => {
+            setIsScanning(false);
+          });
+          
+          console.log('CameraEnhancer initialized');
+        } catch (error) {
+          console.error('Error initializing CameraEnhancer:', error);
+        }
+      }
+    };
+    
+    // Check if container is ready, if not wait a bit
+    if (containerRef.current) {
+      initCameraEnhancer();
+    } else {
+      const timer = setTimeout(() => {
+        if (containerRef.current) {
+          initCameraEnhancer();
+        }
+      }, 200);
+      return () => clearTimeout(timer);
+    }
+  }, [currentView]); // Re-run when view changes to ensure container is available
 
   // Add notification
   const addNotification = (type: 'success' | 'error' | 'warning' | 'info', message: string, details?: string) => {
@@ -426,43 +502,14 @@ export default function MobileScanner() {
   // Start camera - using CameraEnhancer like NextJS-Barcode-Scanner
   const startCamera = async () => {
     try {
-      // Initialize barcode reader if not already done
-      if (!codeReaderRef.current) {
-        codeReaderRef.current = await BarcodeReader.createInstance();
-        
-        // Configure to prioritize PDF417 (boarding pass format)
-        try {
-          const settings = await codeReaderRef.current.getRuntimeSettings();
-          const { EnumBarcodeFormat } = await import('dynamsoft-javascript-barcode');
-          
-          if (EnumBarcodeFormat) {
-            settings.barcodeFormatIds = EnumBarcodeFormat.BF_PDF417 | 
-                                        EnumBarcodeFormat.BF_QR_CODE | 
-                                        EnumBarcodeFormat.BF_DATAMATRIX | 
-                                        EnumBarcodeFormat.BF_AZTEC;
-          }
-          
-          // PDF417 settings may not be in type definition but can be set
-          if ((settings as any).pdf417Settings) {
-            (settings as any).pdf417Settings = (settings as any).pdf417Settings || {};
-            if ((settings as any).pdf417Settings.scanStep !== undefined) {
-              (settings as any).pdf417Settings.scanStep = 2;
-            }
-          }
-          
-          if (settings.expectedBarcodesCount !== undefined) {
-            settings.expectedBarcodesCount = 1;
-          }
-          
-          await codeReaderRef.current.updateRuntimeSettings(settings);
-          console.log('Barcode reader configured for PDF417');
-        } catch (configError) {
-          console.warn('Could not configure barcode reader settings:', configError);
+      // Wait for CameraEnhancer to be initialized if not ready
+      if (!enhancerRef.current) {
+        if (!containerRef.current) {
+          addNotification('error', 'Camera not ready', 'Please wait for camera to initialize');
+          return;
         }
-      }
-      
-      // Initialize CameraEnhancer if not already done
-      if (!enhancerRef.current && containerRef.current) {
+        
+        // Try to initialize if container is ready
         enhancerRef.current = await CameraEnhancer.createInstance();
         await enhancerRef.current.setUIElement(containerRef.current);
         enhancerRef.current.setVideoFit("cover");
@@ -482,15 +529,25 @@ export default function MobileScanner() {
       // Open camera
       if (enhancerRef.current) {
         await enhancerRef.current.open(true);
+      } else {
+        throw new Error('CameraEnhancer not initialized');
       }
     } catch (error: any) {
       console.error('Error accessing camera:', error);
       
-      if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+      // Provide more detailed error information
+      const errorMessage = error?.message || error?.toString() || 'Unknown error';
+      console.error('Camera error details:', {
+        name: error?.name,
+        message: errorMessage,
+        stack: error?.stack
+      });
+      
+      if (error?.name === 'NotAllowedError' || error?.name === 'PermissionDeniedError') {
         setCameraPermission('denied');
         setShowPermissionPrompt(true);
       } else {
-        addNotification('error', 'Camera error', error.message || 'Failed to start camera');
+        addNotification('error', 'Camera error', `Failed to start camera: ${errorMessage}`);
       }
     }
   };
