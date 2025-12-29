@@ -2,8 +2,9 @@
 
 import { useState, useRef, useEffect } from 'react';
 import Header from '../components/Header';
-// Dynamsoft will be imported dynamically to avoid SSR issues
-let BarcodeReader: any = null;
+import { CameraEnhancer } from "dynamsoft-camera-enhancer";
+import { BarcodeReader, TextResult } from "dynamsoft-javascript-barcode";
+import type { PlayCallbackInfo } from "dynamsoft-camera-enhancer/dist/types/interface/playcallbackinfo";
 
 // Sample flights data
 const flights = [
@@ -327,35 +328,29 @@ export default function MobileScanner() {
   const [showPermissionPrompt, setShowPermissionPrompt] = useState(false);
   const [notifications, setNotifications] = useState<Array<{id: string, type: 'success' | 'error' | 'warning' | 'info', message: string, details?: string}>>([]);
   
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const codeReaderRef = useRef<any>(null); // Dynamsoft BarcodeReader instance
+  const containerRef = useRef<HTMLDivElement>(null);
+  const enhancerRef = useRef<CameraEnhancer | null>(null);
+  const codeReaderRef = useRef<BarcodeReader | null>(null);
   const scanningActiveRef = useRef<boolean>(false);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const intervalRef = useRef<any>(null);
+  const decodingRef = useRef<boolean>(false);
   
-  // Initialize Dynamsoft license (you'll need to get a license key from Dynamsoft)
+  // Initialize Dynamsoft license - same approach as NextJS-Barcode-Scanner
   useEffect(() => {
     const initDynamsoft = async () => {
       try {
-        // Dynamically import Dynamsoft to avoid SSR issues
-        const dynamsoftModule = await import('dynamsoft-javascript-barcode');
-        BarcodeReader = dynamsoftModule.BarcodeReader;
-        
-        // Initialize license - using the same approach as NextJS-Barcode-Scanner
         const licenseKey = 'DLS2eyJoYW5kc2hha2VDb2RlIjoiMTA0OTkyMzAwLU1UQTBPVGt5TXpBd0xYZGxZaTFVY21saGJGQnliMm8iLCJtYWluU2VydmVyVVJMIjoiaHR0cHM6Ly9tZGxzLmR5bmFtc29mdG9ubGluZS5jb20iLCJvcmdhbml6YXRpb25JRCI6IjEwNDk5MjMwMCIsInN0YW5kYnlTZXJ2ZXJVUkwiOiJodHRwczovL3NkbHMuZHluYW1zb2Z0b25saW5lLmNvbSIsImNoZWNrQ29kZSI6MTYwOTU4NzI4OH0=';
         
         if (BarcodeReader.isWasmLoaded() === false) {
           BarcodeReader.license = licenseKey;
-          BarcodeReader.engineResourcePath = "https://cdn.jsdelivr.net/npm/dynamsoft-javascript-barcode@9.6.11/dist/";
+          BarcodeReader.engineResourcePath = "@"; // Use local node_modules like NextJS-Barcode-Scanner
         }
         console.log('Dynamsoft SDK loaded');
       } catch (error) {
         console.error('Error loading Dynamsoft SDK:', error);
-        console.warn('Using trial license. For production, please configure your license key.');
       }
     };
     initDynamsoft();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Add notification
@@ -395,7 +390,7 @@ export default function MobileScanner() {
             if (newState === 'granted') {
               setShowPermissionPrompt(false);
               // If we're in camera view and camera isn't running, start it automatically
-              if (currentView === 'camera' && !isScanning && !streamRef.current) {
+              if (currentView === 'camera' && !isScanning && !enhancerRef.current) {
                 startCamera();
               }
             }
@@ -428,250 +423,75 @@ export default function MobileScanner() {
     }
   };
 
-  // Start camera
+  // Start camera - using CameraEnhancer like NextJS-Barcode-Scanner
   const startCamera = async () => {
     try {
-      // Check if we're in a secure context (HTTPS or localhost)
-      if (!window.isSecureContext) {
-        alert('Camera access requires HTTPS. Please access this site using https:// or use localhost for development.');
-        return;
-      }
-
-      // Check if getUserMedia is available
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        throw new Error('Camera API not supported in this browser. Please use a modern browser.');
-      }
-
-      // Request camera with better error handling
-      // Use simpler constraints for better mobile compatibility
-      const constraints: MediaStreamConstraints = {
-        video: {
-          facingMode: { ideal: 'environment' }, // Prefer back camera on mobile
-        }
-      };
-
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.setAttribute('playsinline', 'true');
-        videoRef.current.setAttribute('webkit-playsinline', 'true');
-        videoRef.current.muted = true; // Required for autoplay in many browsers
+      // Initialize barcode reader if not already done
+      if (!codeReaderRef.current) {
+        codeReaderRef.current = await BarcodeReader.createInstance();
         
-        // Ensure video plays (suppress "already playing" warnings)
+        // Configure to prioritize PDF417 (boarding pass format)
         try {
-          if (videoRef.current.paused) {
-            await videoRef.current.play();
+          const settings = await codeReaderRef.current.getRuntimeSettings();
+          const { EnumBarcodeFormat } = await import('dynamsoft-javascript-barcode');
+          
+          if (EnumBarcodeFormat) {
+            settings.barcodeFormatIds = EnumBarcodeFormat.BF_PDF417 | 
+                                        EnumBarcodeFormat.BF_QR_CODE | 
+                                        EnumBarcodeFormat.BF_DATAMATRIX | 
+                                        EnumBarcodeFormat.BF_AZTEC;
           }
-        } catch (playError: any) {
-          // Ignore "already playing" errors - these are harmless
-          if (playError.name !== 'NotAllowedError' && !playError.message?.includes('already playing')) {
-            console.error('Error playing video:', playError);
-          }
-        }
-        
-        setIsScanning(true);
-        setCameraPermission('granted');
-        setShowPermissionPrompt(false);
-        
-        // Initialize Dynamsoft barcode reader for boarding passes
-        if (!codeReaderRef.current) {
-          try {
-            // Ensure Dynamsoft is loaded
-            if (!BarcodeReader) {
-              const dynamsoftModule = await import('dynamsoft-javascript-barcode');
-              BarcodeReader = dynamsoftModule.BarcodeReader;
-              
-              // Set license if not already set
-              if (BarcodeReader.isWasmLoaded() === false) {
-                const licenseKey = 'DLS2eyJoYW5kc2hha2VDb2RlIjoiMTA0OTkyMzAwLU1UQTBPVGt5TXpBd0xYZGxZaTFVY21saGJGQnliMm8iLCJtYWluU2VydmVyVVJMIjoiaHR0cHM6Ly9tZGxzLmR5bmFtc29mdG9ubGluZS5jb20iLCJvcmdhbml6YXRpb25JRCI6IjEwNDk5MjMwMCIsInN0YW5kYnlTZXJ2ZXJVUkwiOiJodHRwczovL3NkbHMuZHluYW1zb2Z0b25saW5lLmNvbSIsImNoZWNrQ29kZSI6MTYwOTU4NzI4OH0=';
-                BarcodeReader.license = licenseKey;
-                BarcodeReader.engineResourcePath = "https://cdn.jsdelivr.net/npm/dynamsoft-javascript-barcode@9.6.11/dist/";
-              }
+          
+          // PDF417 settings may not be in type definition but can be set
+          if ((settings as any).pdf417Settings) {
+            (settings as any).pdf417Settings = (settings as any).pdf417Settings || {};
+            if ((settings as any).pdf417Settings.scanStep !== undefined) {
+              (settings as any).pdf417Settings.scanStep = 2;
             }
-            
-            // Create barcode reader instance - using the same approach as NextJS-Barcode-Scanner
-            codeReaderRef.current = await BarcodeReader.createInstance();
-            
-            // Configure to prioritize PDF417 (boarding pass format)
-            if (codeReaderRef.current && codeReaderRef.current.getRuntimeSettings) {
-              try {
-                const settings = await codeReaderRef.current.getRuntimeSettings();
-                
-                // Use Dynamsoft enum values for barcode formats
-                const EnumBarcodeFormat = (await import('dynamsoft-javascript-barcode')).EnumBarcodeFormat;
-                
-                if (EnumBarcodeFormat) {
-                  settings.barcodeFormatIds = EnumBarcodeFormat.BF_PDF417 | 
-                                              EnumBarcodeFormat.BF_QR_CODE | 
-                                              EnumBarcodeFormat.BF_DATAMATRIX | 
-                                              EnumBarcodeFormat.BF_AZTEC;
-                } else {
-                  settings.barcodeFormatIds = BigInt(0x02000000) | // PDF417
-                                             BigInt(0x04000000) | // QR_CODE
-                                             BigInt(0x08000000) | // DATA_MATRIX
-                                             BigInt(0x10000000);  // AZTEC
-                }
-                
-                if (settings.pdf417Settings) {
-                  settings.pdf417Settings = settings.pdf417Settings || {};
-                  if (settings.pdf417Settings.scanStep !== undefined) {
-                    settings.pdf417Settings.scanStep = 2;
-                  }
-                }
-                
-                if (settings.expectedBarcodesCount !== undefined) {
-                  settings.expectedBarcodesCount = 1;
-                }
-                
-                await codeReaderRef.current.updateRuntimeSettings(settings);
-                console.log('Barcode reader configured for PDF417 with optimized settings');
-              } catch (configError) {
-                console.warn('Could not configure barcode reader settings:', configError);
-              }
-            }
-            console.log('Dynamsoft barcode reader initialized');
-          } catch (error) {
-            console.error('Error creating Dynamsoft barcode reader:', error);
-            console.error('Full error details:', error);
-            addNotification('error', 'Scanner initialization failed', 'Could not initialize barcode scanner. Please refresh the page.');
           }
+          
+          if (settings.expectedBarcodesCount !== undefined) {
+            settings.expectedBarcodesCount = 1;
+          }
+          
+          await codeReaderRef.current.updateRuntimeSettings(settings);
+          console.log('Barcode reader configured for PDF417');
+        } catch (configError) {
+          console.warn('Could not configure barcode reader settings:', configError);
         }
+      }
+      
+      // Initialize CameraEnhancer if not already done
+      if (!enhancerRef.current && containerRef.current) {
+        enhancerRef.current = await CameraEnhancer.createInstance();
+        await enhancerRef.current.setUIElement(containerRef.current);
+        enhancerRef.current.setVideoFit("cover");
         
-        // Start scanning boarding pass barcodes automatically after video is ready
-        setTimeout(() => {
+        enhancerRef.current.on("played", (playCallbackInfo: PlayCallbackInfo) => {
+          setIsScanning(true);
+          setCameraPermission('granted');
+          setShowPermissionPrompt(false);
           startBoardingPassScanning();
-        }, 1000); // Wait 1 second to ensure video is fully ready
+        });
+        
+        enhancerRef.current.on("cameraClose", () => {
+          setIsScanning(false);
+        });
+      }
+      
+      // Open camera
+      if (enhancerRef.current) {
+        await enhancerRef.current.open(true);
       }
     } catch (error: any) {
       console.error('Error accessing camera:', error);
       
-      // Handle permission denied - show UI instead of alert
       if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
         setCameraPermission('denied');
         setShowPermissionPrompt(true);
-        return;
-      }
-      
-      let errorMessage = 'Unable to access camera.\n\n';
-      
-      if (error.name === 'NotFoundError' || error.name === 'DevicesNotFoundError') {
-        errorMessage += 'No camera found on this device.';
-      } else if (error.name === 'NotReadableError' || error.name === 'TrackStartError') {
-        errorMessage += 'Camera is being used by another application.\n\n';
-        errorMessage += 'Please close other apps using the camera and try again.';
-      } else if (error.name === 'OverconstrainedError' || error.name === 'ConstraintNotSatisfiedError') {
-        errorMessage += 'Camera does not support required settings.\n\n';
-        errorMessage += 'Trying with default settings...';
-        // Retry with minimal constraints
-        try {
-          const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-          streamRef.current = stream;
-          if (videoRef.current) {
-            videoRef.current.srcObject = stream;
-            videoRef.current.setAttribute('playsinline', 'true');
-            videoRef.current.setAttribute('webkit-playsinline', 'true');
-            videoRef.current.muted = true; // Required for autoplay in many browsers
-            
-            // Ensure video plays (suppress "already playing" warnings)
-            try {
-              if (videoRef.current.paused) {
-                await videoRef.current.play();
-              }
-            } catch (playError: any) {
-              // Ignore "already playing" errors - these are harmless
-              if (playError.name !== 'NotAllowedError' && !playError.message?.includes('already playing')) {
-                console.error('Error playing video:', playError);
-              }
-            }
-            
-            setIsScanning(true);
-            setCameraPermission('granted');
-            setShowPermissionPrompt(false);
-            
-            // Initialize Dynamsoft barcode reader for boarding passes
-            if (!codeReaderRef.current) {
-              try {
-                // Ensure Dynamsoft is loaded
-                if (!BarcodeReader) {
-                  const dynamsoftModule = await import('dynamsoft-javascript-barcode');
-                  BarcodeReader = dynamsoftModule.BarcodeReader;
-                  
-                  // Set license if not already set
-                  if (BarcodeReader.isWasmLoaded() === false) {
-                    const licenseKey = 'DLS2eyJoYW5kc2hha2VDb2RlIjoiMTA0OTkyMzAwLU1UQTBPVGt5TXpBd0xYZGxZaTFVY21saGJGQnliMm8iLCJtYWluU2VydmVyVVJMIjoiaHR0cHM6Ly9tZGxzLmR5bmFtc29mdG9ubGluZS5jb20iLCJvcmdhbml6YXRpb25JRCI6IjEwNDk5MjMwMCIsInN0YW5kYnlTZXJ2ZXJVUkwiOiJodHRwczovL3NkbHMuZHluYW1zb2Z0b25saW5lLmNvbSIsImNoZWNrQ29kZSI6MTYwOTU4NzI4OH0=';
-                    BarcodeReader.license = licenseKey;
-                    BarcodeReader.engineResourcePath = "https://cdn.jsdelivr.net/npm/dynamsoft-javascript-barcode@9.6.11/dist/";
-                  }
-                }
-                
-                // Create barcode reader instance - using the same approach as NextJS-Barcode-Scanner
-                codeReaderRef.current = await BarcodeReader.createInstance();
-                
-                // Configure to prioritize PDF417 (boarding pass format)
-                if (codeReaderRef.current && codeReaderRef.current.getRuntimeSettings) {
-                  try {
-                    const settings = await codeReaderRef.current.getRuntimeSettings();
-                    
-                    // Use Dynamsoft enum values for barcode formats
-                    const EnumBarcodeFormat = (await import('dynamsoft-javascript-barcode')).EnumBarcodeFormat;
-                    
-                    if (EnumBarcodeFormat) {
-                      settings.barcodeFormatIds = EnumBarcodeFormat.BF_PDF417 | 
-                                                  EnumBarcodeFormat.BF_QR_CODE | 
-                                                  EnumBarcodeFormat.BF_DATAMATRIX | 
-                                                  EnumBarcodeFormat.BF_AZTEC;
-                    } else {
-                      settings.barcodeFormatIds = BigInt(0x02000000) | // PDF417
-                                                 BigInt(0x04000000) | // QR_CODE
-                                                 BigInt(0x08000000) | // DATA_MATRIX
-                                                 BigInt(0x10000000);  // AZTEC
-                    }
-                    
-                    if (settings.pdf417Settings) {
-                      settings.pdf417Settings = settings.pdf417Settings || {};
-                      if (settings.pdf417Settings.scanStep !== undefined) {
-                        settings.pdf417Settings.scanStep = 2;
-                      }
-                    }
-                    
-                    if (settings.expectedBarcodesCount !== undefined) {
-                      settings.expectedBarcodesCount = 1;
-                    }
-                    
-                    await codeReaderRef.current.updateRuntimeSettings(settings);
-                    console.log('Barcode reader configured for PDF417 with optimized settings');
-                  } catch (configError) {
-                    console.warn('Could not configure barcode reader settings:', configError);
-                  }
-                }
-                console.log('Dynamsoft barcode reader initialized');
-              } catch (error) {
-                console.error('Error creating Dynamsoft barcode reader:', error);
-                addNotification('error', 'Scanner initialization failed', 'Could not initialize barcode scanner. Please refresh the page.');
-              }
-            }
-            
-            // Start scanning boarding pass barcodes automatically after video is ready
-            setTimeout(() => {
-              startBoardingPassScanning();
-            }, 1000); // Wait 1 second to ensure video is fully ready
-          }
-          return;
-        } catch (retryError) {
-          errorMessage = 'Camera access failed. Please try again.';
-        }
-      } else if (error.name === 'NotSupportedError') {
-        errorMessage += 'Camera access requires HTTPS.\n\n';
-        errorMessage += 'Please access this site using https:// (secure connection).';
-      } else if (error.message) {
-        errorMessage += error.message;
       } else {
-        errorMessage += 'Please check your browser permissions and try again.\n\n';
-        errorMessage += 'Make sure you\'re using HTTPS or localhost.';
+        addNotification('error', 'Camera error', error.message || 'Failed to start camera');
       }
-      
-      alert(errorMessage);
     }
   };
 
@@ -681,202 +501,64 @@ export default function MobileScanner() {
     await startCamera();
   };
 
-  // Start scanning boarding pass barcodes continuously
-  const startBoardingPassScanning = async () => {
-    // Check if we have the necessary refs and stream (more reliable than state)
-    if (!videoRef.current || !codeReaderRef.current || !streamRef.current) {
-      const missingResources: string[] = [];
-      if (!videoRef.current) missingResources.push('video');
-      if (!codeReaderRef.current) missingResources.push('barcode reader');
-      if (!streamRef.current) missingResources.push('camera stream');
-      
-      console.log('Cannot start scanning - waiting for resources:', { 
-        hasVideo: !!videoRef.current, 
-        hasReader: !!codeReaderRef.current, 
-        hasStream: !!streamRef.current,
-        missing: missingResources
-      });
-      
-      // Retry after a short delay if we're missing resources
-      // This handles race conditions where refs aren't set yet
-      setTimeout(() => {
-        if (videoRef.current && codeReaderRef.current && streamRef.current) {
-          console.log('Resources now available, retrying scan start...');
-          startBoardingPassScanning();
-        } else {
-          console.log('Resources still not available after retry');
-          addNotification('warning', 'Scanning delayed', `Waiting for: ${missingResources.join(', ')}. Please ensure camera is started.`);
-        }
-      }, 500);
+  // Start scanning boarding pass barcodes - using CameraEnhancer like NextJS-Barcode-Scanner
+  const startBoardingPassScanning = () => {
+    if (!codeReaderRef.current || !enhancerRef.current) {
+      console.log('Cannot start scanning - missing reader or enhancer');
       return;
     }
     
-    // Get video and codeReader references
-    const video = videoRef.current;
-    const codeReader = codeReaderRef.current;
-    
-    // Double-check we're not already scanning
-    // If stuck, reset the flag immediately if video isn't ready
     if (scanningActiveRef.current) {
-      console.log('Scanning already active, checking if stuck...');
-      // Check if video is actually ready - if not, reset immediately
-      if (!video || video.readyState < 2 || video.videoWidth === 0 || video.videoHeight === 0) {
-        console.log('Resetting stuck scanning flag - video not ready');
-        scanningActiveRef.current = false;
-        // Wait a moment and retry
-        setTimeout(() => {
-          if (streamRef.current && videoRef.current && codeReaderRef.current) {
-            startBoardingPassScanning();
-          }
-        }, 500);
-        return;
-      }
-      // If video is ready but scanning is stuck, wait a bit then reset
-      setTimeout(() => {
-        if (scanningActiveRef.current && (!streamRef.current || !videoRef.current)) {
-          console.log('Resetting stuck scanning flag - resources missing');
-          scanningActiveRef.current = false;
-        }
-      }, 3000);
-      return;
-    }
-    
-    // Wait for video to be ready with better retry logic
-    let retries = 0;
-    const maxRetries = 10;
-    
-    while ((video.readyState < 2 || video.videoWidth === 0 || video.videoHeight === 0) && retries < maxRetries) {
-      console.log(`Waiting for video to be ready... (attempt ${retries + 1}/${maxRetries})`, {
-        readyState: video.readyState,
-        width: video.videoWidth,
-        height: video.videoHeight
-      });
-      
-      // Wait for video metadata to load
-      await new Promise((resolve) => {
-        if (video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0) {
-          resolve(undefined);
-        } else {
-          const timeout = setTimeout(() => resolve(undefined), 1000);
-          video.addEventListener('loadedmetadata', () => {
-            clearTimeout(timeout);
-            resolve(undefined);
-          }, { once: true });
-          video.addEventListener('loadeddata', () => {
-            clearTimeout(timeout);
-            resolve(undefined);
-          }, { once: true });
-        }
-      });
-      
-      retries++;
-      
-      // If still not ready, wait a bit before retrying
-      if (video.readyState < 2 || video.videoWidth === 0 || video.videoHeight === 0) {
-        await new Promise(resolve => setTimeout(resolve, 500));
-      }
-    }
-    
-    if (video.videoWidth === 0 || video.videoHeight === 0) {
-      console.error('Video dimensions not available after retries');
-      addNotification('error', 'Camera not ready', 'Video dimensions are not available. Please ensure camera is working and try again.');
-      scanningActiveRef.current = false;
+      console.log('Scanning already active');
       return;
     }
     
     scanningActiveRef.current = true;
-    console.log('Starting scanning loop...', { 
-      videoWidth: video.videoWidth, 
-      videoHeight: video.videoHeight,
-      readyState: video.readyState 
-    });
-    addNotification('info', 'Scanning started', `Camera ready (${video.videoWidth}x${video.videoHeight}). Looking for boarding pass barcodes...`);
+    addNotification('info', 'Scanning started', 'Looking for boarding pass barcodes...');
     
-    // Continuous scanning loop
-    const scanLoop = async () => {
-      let scanCount = 0;
-      // Use streamRef as the primary check since it's more reliable than state
-      while (scanningActiveRef.current && streamRef.current) {
-        // Skip if we have a scan result showing
-        if (scanResult) {
-          await new Promise(resolve => setTimeout(resolve, 100));
-          continue;
+    // Start scanning loop - same approach as NextJS-Barcode-Scanner
+    const startScanning = () => {
+      const decode = async () => {
+        if (decodingRef.current === false && codeReaderRef.current && enhancerRef.current) {
+          decodingRef.current = true;
+          try {
+            // Use enhancer.getFrame() - same as NextJS-Barcode-Scanner
+            const results = await codeReaderRef.current.decode(enhancerRef.current.getFrame());
+            
+            if (results && Array.isArray(results) && results.length > 0) {
+              const barcodeText = results[0].barcodeText;
+              if (barcodeText) {
+                scanningActiveRef.current = false;
+                stopScanning();
+                handleBoardingPassDetected(barcodeText);
+                return;
+              }
+            }
+          } catch (error) {
+            // Ignore "no barcode found" errors
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            if (!errorMessage.includes('No barcode') && !errorMessage.includes('not found')) {
+              console.error('Decode error:', error);
+            }
+          }
+          decodingRef.current = false;
         }
-        
-        try {
-          // Check video is still valid
-          if (!video || video.readyState < 2 || video.videoWidth === 0) {
-            await new Promise(resolve => setTimeout(resolve, 500));
-            continue;
-          }
-          
-          // For PDF417, use canvas-based scanning for better image quality
-          // PDF417 requires high resolution and sharp images
-          const canvas = document.createElement('canvas');
-          // Use full video resolution for better quality
-          canvas.width = video.videoWidth;
-          canvas.height = video.videoHeight;
-          const ctx = canvas.getContext('2d', { willReadFrequently: true });
-          
-          if (!ctx) {
-            await new Promise(resolve => setTimeout(resolve, 200));
-            continue;
-          }
-          
-          // Draw video frame to canvas with high quality
-          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-          
-          // Decode barcode from canvas using the correct API (same as NextJS-Barcode-Scanner)
-          // decode() returns an array of TextResult objects directly
-          const results = await codeReader.decode(canvas);
-          
-          // Handle results - decode() returns an array of TextResult objects
-          let barcodeText: string | null = null;
-          if (results && Array.isArray(results) && results.length > 0) {
-            // TextResult has barcodeText property
-            barcodeText = results[0].barcodeText;
-          }
-          
-          if (barcodeText) {
-            // Barcode detected!
-            console.log('Barcode detected:', barcodeText);
-            scanningActiveRef.current = false; // Stop scanning
-            handleBoardingPassDetected(barcodeText);
-            return; // Exit loop
-          }
-          
-          // No barcode found - continue scanning
-          scanCount++;
-          if (scanCount % 50 === 0) {
-            // Log every 50 attempts to show it's working
-            console.log('Scanning... (attempt', scanCount, ')');
-          }
-        } catch (error) {
-          // Log errors and show notification
-          console.error('Decode error:', error);
-          const errorMessage = error instanceof Error ? error.message : String(error);
-          // Only show notification for non-common errors
-          if (!errorMessage.includes('No barcode') && !errorMessage.includes('not found')) {
-            addNotification('error', 'Scanning error', `Error while scanning: ${errorMessage}. Scanning will continue...`);
-          }
-        }
-        
-        // Small delay before next scan attempt
-        await new Promise(resolve => setTimeout(resolve, 200));
-      }
+      };
       
-      console.log('Scanning loop ended');
-      if (scanningActiveRef.current === false) {
-        addNotification('info', 'Scanning stopped', 'Barcode scanning has been stopped.');
-      }
+      // Use 40ms interval like NextJS-Barcode-Scanner
+      intervalRef.current = setInterval(decode, 40);
     };
     
-    scanLoop().catch((err) => {
-      console.error('Error in scanning loop:', err);
-      scanningActiveRef.current = false;
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      addNotification('error', 'Scanning failed', `Scanning loop encountered an error: ${errorMessage}`);
-    });
+    startScanning();
+  };
+  
+  // Stop scanning
+  const stopScanning = () => {
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    }
+    scanningActiveRef.current = false;
   };
 
   // Parse boarding pass barcode data (IATA format)
@@ -1039,7 +721,7 @@ export default function MobileScanner() {
     // Resume scanning after 3 seconds (longer to read the details)
     setTimeout(() => {
       setScanResult(null);
-      if (streamRef.current) {
+      if (enhancerRef.current && isScanning) {
         addNotification('info', 'Resuming scan...', 'Ready to scan next boarding pass');
         startBoardingPassScanning();
       }
@@ -1078,84 +760,38 @@ export default function MobileScanner() {
     return passenger;
   };
 
-  // Capture and scan from image (fallback method)
+  // Capture and scan from image (fallback method) - using CameraEnhancer
   const captureAndScan = async () => {
-    const video = videoRef.current;
-    const codeReader = codeReaderRef.current;
-    
-    if (!video || !codeReader || !streamRef.current) {
+    if (!codeReaderRef.current || !enhancerRef.current) {
       addNotification('error', 'Camera not ready', 'Please ensure camera is started before capturing');
-      return;
-    }
-    
-    // Wait for video to be ready with retries
-    let retries = 0;
-    const maxRetries = 5;
-    
-    while ((video.readyState < 2 || video.videoWidth === 0 || video.videoHeight === 0) && retries < maxRetries) {
-      console.log(`Waiting for video before capture... (attempt ${retries + 1}/${maxRetries})`);
-      await new Promise(resolve => setTimeout(resolve, 500));
-      retries++;
-    }
-    
-    // Check video is ready
-    if (video.readyState < 2 || video.videoWidth === 0 || video.videoHeight === 0) {
-      addNotification('error', 'Video not ready', 'Please wait for camera to be ready. Try again in a moment.');
       return;
     }
     
     // Temporarily stop continuous scanning while capturing
     const wasScanning = scanningActiveRef.current;
-    scanningActiveRef.current = false;
+    stopScanning();
     
     try {
-      // Create canvas to capture current frame
-      if (!canvasRef.current) {
-        const canvas = document.createElement('canvas');
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        canvasRef.current = canvas;
-      }
-      
-      const canvas = canvasRef.current;
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      const ctx = canvas.getContext('2d');
-      
-      if (!ctx) {
-        addNotification('error', 'Capture failed', 'Could not create canvas context');
-        return;
-      }
-      
-      // Draw current video frame to canvas with high quality
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      
       addNotification('info', 'Capturing...', 'Analyzing captured image for PDF417 barcode...');
       
-      // Decode barcode from canvas using the correct API (same as NextJS-Barcode-Scanner)
-      // decode() returns an array of TextResult objects directly
-      const results = await codeReader.decode(canvas);
+      // Use enhancer.getFrame() - same as NextJS-Barcode-Scanner
+      const results = await codeReaderRef.current.decode(enhancerRef.current.getFrame());
       
-      // Handle results - decode() returns an array of TextResult objects
-      let barcodeText: string | null = null;
       if (results && Array.isArray(results) && results.length > 0) {
-        // TextResult has barcodeText property
-        barcodeText = results[0].barcodeText;
+        const barcodeText = results[0].barcodeText;
+        if (barcodeText) {
+          console.log('Barcode detected from capture:', barcodeText);
+          handleBoardingPassDetected(barcodeText);
+          return;
+        }
       }
       
-      if (barcodeText) {
-        // Barcode detected!
-        console.log('Barcode detected from capture:', barcodeText);
-        handleBoardingPassDetected(barcodeText);
-        // Don't resume scanning - handleBoardingPassDetected will handle it
-      } else {
-        addNotification('warning', 'No barcode found', 'Could not detect a barcode in the captured image. Please try again.');
-        // Resume continuous scanning if it was active
-        if (wasScanning && streamRef.current) {
-          setTimeout(() => {
-            startBoardingPassScanning();
-          }, 500);
-        }
+      addNotification('warning', 'No barcode found', 'Could not detect a barcode in the captured image. Please try again.');
+      // Resume continuous scanning if it was active
+      if (wasScanning && enhancerRef.current) {
+        setTimeout(() => {
+          startBoardingPassScanning();
+        }, 500);
       }
     } catch (error) {
       console.error('Error capturing and scanning:', error);
@@ -1166,7 +802,7 @@ export default function MobileScanner() {
         addNotification('error', 'Scan failed', `Error while scanning captured image: ${errorMessage}`);
       }
       // Resume continuous scanning if it was active
-      if (wasScanning && streamRef.current) {
+      if (wasScanning && enhancerRef.current) {
         setTimeout(() => {
           startBoardingPassScanning();
         }, 500);
@@ -1174,27 +810,11 @@ export default function MobileScanner() {
     }
   };
 
-  // Stop camera
+  // Stop camera - using CameraEnhancer like NextJS-Barcode-Scanner
   const stopCamera = () => {
-    // Stop barcode scanning loop
-    scanningActiveRef.current = false;
-    
-    // Stop barcode reader (Dynamsoft doesn't need explicit reset, but we can clean up)
-    if (codeReaderRef.current) {
-      try {
-        // Dynamsoft reader doesn't have a reset method, but we can set it to null
-        // The reader will be recreated when camera starts again
-      } catch (error) {
-        // Ignore errors
-      }
-    }
-    
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop());
-      streamRef.current = null;
-    }
-    if (videoRef.current) {
-      videoRef.current.srcObject = null;
+    stopScanning();
+    if (enhancerRef.current) {
+      enhancerRef.current.close();
     }
     setIsScanning(false);
   };
@@ -1247,57 +867,11 @@ export default function MobileScanner() {
     }
   };
 
-  // Ensure video plays when stream is set and start scanning when ready
-  useEffect(() => {
-    // Check streamRef instead of isScanning to avoid race conditions
-    if (videoRef.current && streamRef.current) {
-      const video = videoRef.current;
-      if (video.paused) {
-        video.play().catch((error: any) => {
-          // Ignore "already playing" errors - these are harmless
-          if (error.name !== 'NotAllowedError' && !error.message?.includes('already playing')) {
-            console.error('Error playing video in useEffect:', error);
-          }
-        });
-      }
-      
-      // Start scanning when video is ready (only if not already scanning)
-      const handleVideoReady = () => {
-        // Check streamRef instead of isScanning state to avoid race conditions
-        if (video.readyState >= 2 && video.videoWidth > 0 && streamRef.current && !scanningActiveRef.current) {
-          console.log('Video ready, starting scan...');
-          // Small delay to ensure everything is ready
-          setTimeout(() => {
-            if (streamRef.current && !scanningActiveRef.current && videoRef.current && codeReaderRef.current) {
-              startBoardingPassScanning();
-            }
-          }, 200);
-        }
-      };
-      
-      if (video.readyState >= 2 && video.videoWidth > 0) {
-        // Video already ready
-        handleVideoReady();
-      } else {
-        // Wait for video to be ready
-        video.addEventListener('loadedmetadata', handleVideoReady, { once: true });
-        video.addEventListener('loadeddata', handleVideoReady, { once: true });
-      }
-      
-      return () => {
-        video.removeEventListener('loadedmetadata', handleVideoReady);
-        video.removeEventListener('loadeddata', handleVideoReady);
-      };
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isScanning]); // Keep isScanning as dependency but check streamRef inside
-
   // Start camera automatically when camera view opens, and cleanup on exit
   useEffect(() => {
     if (currentView === 'camera') {
       // Always try to start camera when entering camera view
-      // Browser will handle permission prompting if needed
-      if (!isScanning && !streamRef.current) {
+      if (!isScanning && !enhancerRef.current) {
         startCamera().catch(() => {
           // If camera fails to start, show permission prompt if needed
           if (cameraPermission === 'denied' || cameraPermission === 'prompt') {
@@ -1565,29 +1139,15 @@ export default function MobileScanner() {
                 </div>
               </div>
 
-              {/* Camera Scanner Frame */}
+              {/* Camera Scanner Frame - using CameraEnhancer like NextJS-Barcode-Scanner */}
               <div className="relative mb-4 sm:mb-6">
-                <div className="bg-gray-900 rounded-lg overflow-hidden aspect-square flex items-center justify-center relative min-h-[250px] sm:min-h-[300px] md:min-h-[400px]">
-                  {/* Video element - always render */}
-                  <video
-                    ref={videoRef}
-                    autoPlay
-                    playsInline
-                    muted
-                    className={`w-full h-full object-cover absolute inset-0 z-0 ${isScanning ? 'block' : 'hidden'}`}
-                    onLoadedMetadata={(e) => {
-                      // Ensure video plays when metadata is loaded
-                      const video = e.currentTarget;
-                      if (video.paused) {
-                        video.play().catch((error: any) => {
-                          // Ignore "already playing" errors - these are harmless
-                          if (error.name !== 'NotAllowedError' && !error.message?.includes('already playing')) {
-                            console.error('Error playing video:', error);
-                          }
-                        });
-                      }
-                    }}
-                  />
+                <div 
+                  ref={containerRef}
+                  className="bg-gray-900 rounded-lg overflow-hidden aspect-square flex items-center justify-center relative min-h-[250px] sm:min-h-[300px] md:min-h-[400px]"
+                  style={{ position: "relative", width: "100%", height: "100%" }}
+                >
+                  {/* CameraEnhancer will inject video here */}
+                  <div className="dce-video-container"></div>
                   
                   {/* Corner markers - white brackets */}
                   {isScanning && (
@@ -1732,8 +1292,6 @@ export default function MobileScanner() {
                 )}
               </div>
 
-              {/* Hidden canvas for image capture */}
-              <canvas ref={canvasRef} className="hidden" />
               
               {/* Instructions */}
               <div className="text-center text-sm text-gray-600 space-y-1 mb-4 mt-8">
@@ -1750,7 +1308,7 @@ export default function MobileScanner() {
                       scanningActiveRef.current = false;
                       addNotification('info', 'Scanning reset', 'Resetting scanner. Please wait...');
                       setTimeout(() => {
-                        if (streamRef.current && videoRef.current && codeReaderRef.current) {
+                        if (enhancerRef.current && codeReaderRef.current) {
                           startBoardingPassScanning();
                         }
                       }, 1000);
