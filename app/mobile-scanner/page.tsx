@@ -343,42 +343,57 @@ export default function MobileScanner() {
         try {
           const licenseKey = 'DLS2eyJoYW5kc2hha2VDb2RlIjoiMTA0OTkyMzAwLU1UQTBPVGt5TXpBd0xYZGxZaTFVY21saGJGQnliMm8iLCJtYWluU2VydmVyVVJMIjoiaHR0cHM6Ly9tZGxzLmR5bmFtc29mdG9ubGluZS5jb20iLCJvcmdhbml6YXRpb25JRCI6IjEwNDk5MjMwMCIsInN0YW5kYnlTZXJ2ZXJVUkwiOiJodHRwczovL3NkbHMuZHluYW1zb2Z0b25saW5lLmNvbSIsImNoZWNrQ29kZSI6MTYwOTU4NzI4OH0=';
           
+          // Set license BEFORE createInstance - exactly like NextJS-Barcode-Scanner
+          // CRITICAL: License must be set BEFORE createInstance or loadWasm
+          // Check if WASM is not loaded - if it is, license should already be set
           if (BarcodeReader.isWasmLoaded() === false) {
+            // Set license and engine path BEFORE any createInstance call
             BarcodeReader.license = licenseKey;
             BarcodeReader.engineResourcePath = "@"; // Use local node_modules like NextJS-Barcode-Scanner
+            console.log('License and engine path set');
+          } else {
+            // WASM already loaded - license should be set, but ensure engine path is set
+            if (!BarcodeReader.engineResourcePath || BarcodeReader.engineResourcePath !== "@") {
+              BarcodeReader.engineResourcePath = "@";
+            }
+            console.log('WASM already loaded, skipping license set');
           }
           
-          // Initialize BarcodeReader
-          codeReaderRef.current = await BarcodeReader.createInstance();
-          
-          // Configure to prioritize PDF417 (boarding pass format)
-          try {
-            const settings = await codeReaderRef.current.getRuntimeSettings();
-            const { EnumBarcodeFormat } = await import('dynamsoft-javascript-barcode');
+          // Only create instance if we don't already have one
+          // This ensures license is set before createInstance
+          if (!codeReaderRef.current) {
+            // Initialize BarcodeReader AFTER license is set
+            codeReaderRef.current = await BarcodeReader.createInstance();
             
-            if (EnumBarcodeFormat) {
-              settings.barcodeFormatIds = EnumBarcodeFormat.BF_PDF417 | 
-                                          EnumBarcodeFormat.BF_QR_CODE | 
-                                          EnumBarcodeFormat.BF_DATAMATRIX | 
-                                          EnumBarcodeFormat.BF_AZTEC;
-            }
-            
-            // PDF417 settings may not be in type definition but can be set
-            if ((settings as any).pdf417Settings) {
-              (settings as any).pdf417Settings = (settings as any).pdf417Settings || {};
-              if ((settings as any).pdf417Settings.scanStep !== undefined) {
-                (settings as any).pdf417Settings.scanStep = 2;
+            // Configure to prioritize PDF417 (boarding pass format)
+            try {
+              const settings = await codeReaderRef.current.getRuntimeSettings();
+              const { EnumBarcodeFormat } = await import('dynamsoft-javascript-barcode');
+              
+              if (EnumBarcodeFormat) {
+                settings.barcodeFormatIds = EnumBarcodeFormat.BF_PDF417 | 
+                                            EnumBarcodeFormat.BF_QR_CODE | 
+                                            EnumBarcodeFormat.BF_DATAMATRIX | 
+                                            EnumBarcodeFormat.BF_AZTEC;
               }
+              
+              // PDF417 settings may not be in type definition but can be set
+              if ((settings as any).pdf417Settings) {
+                (settings as any).pdf417Settings = (settings as any).pdf417Settings || {};
+                if ((settings as any).pdf417Settings.scanStep !== undefined) {
+                  (settings as any).pdf417Settings.scanStep = 2;
+                }
+              }
+              
+              if (settings.expectedBarcodesCount !== undefined) {
+                settings.expectedBarcodesCount = 1;
+              }
+              
+              await codeReaderRef.current.updateRuntimeSettings(settings);
+              console.log('Barcode reader configured for PDF417');
+            } catch (configError) {
+              console.warn('Could not configure barcode reader settings:', configError);
             }
-            
-            if (settings.expectedBarcodesCount !== undefined) {
-              settings.expectedBarcodesCount = 1;
-            }
-            
-            await codeReaderRef.current.updateRuntimeSettings(settings);
-            console.log('Barcode reader configured for PDF417');
-          } catch (configError) {
-            console.warn('Could not configure barcode reader settings:', configError);
           }
           
           console.log('Dynamsoft SDK loaded');
