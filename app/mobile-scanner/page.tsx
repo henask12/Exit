@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from 'react';
 import Header from '../components/Header';
 // Dynamsoft will be imported dynamically to avoid SSR issues
-let dynamsoftSDK: any = null;
+let BarcodeReader: any = null;
 
 // Sample flights data
 const flights = [
@@ -338,23 +338,15 @@ export default function MobileScanner() {
     const initDynamsoft = async () => {
       try {
         // Dynamically import Dynamsoft to avoid SSR issues
-        dynamsoftSDK = await import('dynamsoft-capture-vision-bundle');
+        const dynamsoftModule = await import('dynamsoft-javascript-barcode');
+        BarcodeReader = dynamsoftModule.BarcodeReader;
         
-        // Try to initialize license - the API might vary by version
-        // Initialize with a trial license - replace with your actual license key
-        // Get a free 30-day trial at: https://www.dynamsoft.com/capture-vision/confirmation/
-        // const licenseKey = 'DLS2eyJvcmdhbml6YXRpb25JRCI6IjIwMDAwMSJ9'; // Public trial license
+        // Initialize license - using the same approach as NextJS-Barcode-Scanner
         const licenseKey = 'DLS2eyJoYW5kc2hha2VDb2RlIjoiMTA0OTkyMzAwLU1UQTBPVGt5TXpBd0xYZGxZaTFVY21saGJGQnliMm8iLCJtYWluU2VydmVyVVJMIjoiaHR0cHM6Ly9tZGxzLmR5bmFtc29mdG9ubGluZS5jb20iLCJvcmdhbml6YXRpb25JRCI6IjEwNDk5MjMwMCIsInN0YW5kYnlTZXJ2ZXJVUkwiOiJodHRwczovL3NkbHMuZHluYW1zb2Z0b25saW5lLmNvbSIsImNoZWNrQ29kZSI6MTYwOTU4NzI4OH0=';
         
-        // Try different possible API structures
-        if (dynamsoftSDK.CoreModule?.initLicense) {
-          await dynamsoftSDK.CoreModule.initLicense(licenseKey);
-        } else if (dynamsoftSDK.initLicense) {
-          await dynamsoftSDK.initLicense(licenseKey);
-        } else if (dynamsoftSDK.default?.initLicense) {
-          await dynamsoftSDK.default.initLicense(licenseKey);
-        } else {
-          console.warn('License initialization method not found, will try when creating reader');
+        if (BarcodeReader.isWasmLoaded() === false) {
+          BarcodeReader.license = licenseKey;
+          BarcodeReader.engineResourcePath = "https://cdn.jsdelivr.net/npm/dynamsoft-javascript-barcode@9.6.11/dist/";
         }
         console.log('Dynamsoft SDK loaded');
       } catch (error) {
@@ -486,80 +478,58 @@ export default function MobileScanner() {
         if (!codeReaderRef.current) {
           try {
             // Ensure Dynamsoft is loaded
-            if (!dynamsoftSDK) {
-              dynamsoftSDK = await import('dynamsoft-capture-vision-bundle');
-            }
-            
-            // Debug: Log available exports
-            console.log('Dynamsoft SDK exports:', Object.keys(dynamsoftSDK));
-            
-            // Try DBR (Dynamsoft Barcode Reader) first - this is the standard API
-            const DBR = dynamsoftSDK.DBR || dynamsoftSDK.default?.DBR;
-            const BarcodeReaderModule = dynamsoftSDK.BarcodeReaderModule || dynamsoftSDK.default?.BarcodeReaderModule;
-            
-            // Try different methods to create instance
-            if (DBR) {
-              // DBR is the standard Dynamsoft Barcode Reader module
-              if (DBR.BarcodeReader && typeof DBR.BarcodeReader.createInstance === 'function') {
-                codeReaderRef.current = await DBR.BarcodeReader.createInstance();
-              } else if (DBR.BarcodeReader && typeof DBR.BarcodeReader === 'function') {
-                codeReaderRef.current = new DBR.BarcodeReader();
-              } else if (typeof DBR.createInstance === 'function') {
-                codeReaderRef.current = await DBR.createInstance();
-              } else {
-                throw new Error('DBR found but no valid createInstance method');
+            if (!BarcodeReader) {
+              const dynamsoftModule = await import('dynamsoft-javascript-barcode');
+              BarcodeReader = dynamsoftModule.BarcodeReader;
+              
+              // Set license if not already set
+              if (BarcodeReader.isWasmLoaded() === false) {
+                const licenseKey = 'DLS2eyJoYW5kc2hha2VDb2RlIjoiMTA0OTkyMzAwLU1UQTBPVGt5TXpBd0xYZGxZaTFVY21saGJGQnliMm8iLCJtYWluU2VydmVyVVJMIjoiaHR0cHM6Ly9tZGxzLmR5bmFtc29mdG9ubGluZS5jb20iLCJvcmdhbml6YXRpb25JRCI6IjEwNDk5MjMwMCIsInN0YW5kYnlTZXJ2ZXJVUkwiOiJodHRwczovL3NkbHMuZHluYW1zb2Z0b25saW5lLmNvbSIsImNoZWNrQ29kZSI6MTYwOTU4NzI4OH0=';
+                BarcodeReader.license = licenseKey;
+                BarcodeReader.engineResourcePath = "https://cdn.jsdelivr.net/npm/dynamsoft-javascript-barcode@9.6.11/dist/";
               }
-            } else if (BarcodeReaderModule?.createInstance) {
-              codeReaderRef.current = await BarcodeReaderModule.createInstance();
-            } else if (BarcodeReaderModule && typeof BarcodeReaderModule === 'function') {
-              // Try using it as a constructor
-              codeReaderRef.current = new BarcodeReaderModule();
-            } else {
-              // Try to find any barcode-related class
-              const possibleClasses = Object.keys(dynamsoftSDK).filter(key => 
-                key.toLowerCase().includes('barcode') || key.toLowerCase().includes('reader') || key === 'DBR'
-              );
-              console.log('Possible barcode classes:', possibleClasses);
-              throw new Error(`BarcodeReader createInstance method not found. Available: ${Object.keys(dynamsoftSDK).slice(0, 10).join(', ')}`);
             }
             
-                // Configure to prioritize PDF417 (boarding pass format)
-                if (codeReaderRef.current && codeReaderRef.current.getRuntimeSettings) {
-                  try {
-                    const settings = await codeReaderRef.current.getRuntimeSettings();
-                    
-                    // Use Dynamsoft enum values for barcode formats
-                    const EnumBarcodeFormat = dynamsoftSDK.EnumBarcodeFormat || dynamsoftSDK.default?.EnumBarcodeFormat;
-                    
-                    if (EnumBarcodeFormat) {
-                      settings.barcodeFormatIds = EnumBarcodeFormat.BF_PDF417 | 
-                                                  EnumBarcodeFormat.BF_QR_CODE | 
-                                                  EnumBarcodeFormat.BF_DATAMATRIX | 
-                                                  EnumBarcodeFormat.BF_AZTEC;
-                    } else {
-                      settings.barcodeFormatIds = BigInt(0x02000000) | // PDF417
-                                                 BigInt(0x04000000) | // QR_CODE
-                                                 BigInt(0x08000000) | // DATA_MATRIX
-                                                 BigInt(0x10000000);  // AZTEC
-                    }
-                    
-                    if (settings.pdf417Settings) {
-                      settings.pdf417Settings = settings.pdf417Settings || {};
-                      if (settings.pdf417Settings.scanStep !== undefined) {
-                        settings.pdf417Settings.scanStep = 2;
-                      }
-                    }
-                    
-                    if (settings.expectedBarcodesCount !== undefined) {
-                      settings.expectedBarcodesCount = 1;
-                    }
-                    
-                    await codeReaderRef.current.updateRuntimeSettings(settings);
-                    console.log('Barcode reader configured for PDF417 with optimized settings');
-                  } catch (configError) {
-                    console.warn('Could not configure barcode reader settings:', configError);
+            // Create barcode reader instance - using the same approach as NextJS-Barcode-Scanner
+            codeReaderRef.current = await BarcodeReader.createInstance();
+            
+            // Configure to prioritize PDF417 (boarding pass format)
+            if (codeReaderRef.current && codeReaderRef.current.getRuntimeSettings) {
+              try {
+                const settings = await codeReaderRef.current.getRuntimeSettings();
+                
+                // Use Dynamsoft enum values for barcode formats
+                const EnumBarcodeFormat = (await import('dynamsoft-javascript-barcode')).EnumBarcodeFormat;
+                
+                if (EnumBarcodeFormat) {
+                  settings.barcodeFormatIds = EnumBarcodeFormat.BF_PDF417 | 
+                                              EnumBarcodeFormat.BF_QR_CODE | 
+                                              EnumBarcodeFormat.BF_DATAMATRIX | 
+                                              EnumBarcodeFormat.BF_AZTEC;
+                } else {
+                  settings.barcodeFormatIds = BigInt(0x02000000) | // PDF417
+                                             BigInt(0x04000000) | // QR_CODE
+                                             BigInt(0x08000000) | // DATA_MATRIX
+                                             BigInt(0x10000000);  // AZTEC
+                }
+                
+                if (settings.pdf417Settings) {
+                  settings.pdf417Settings = settings.pdf417Settings || {};
+                  if (settings.pdf417Settings.scanStep !== undefined) {
+                    settings.pdf417Settings.scanStep = 2;
                   }
                 }
+                
+                if (settings.expectedBarcodesCount !== undefined) {
+                  settings.expectedBarcodesCount = 1;
+                }
+                
+                await codeReaderRef.current.updateRuntimeSettings(settings);
+                console.log('Barcode reader configured for PDF417 with optimized settings');
+              } catch (configError) {
+                console.warn('Could not configure barcode reader settings:', configError);
+              }
+            }
             console.log('Dynamsoft barcode reader initialized');
           } catch (error) {
             console.error('Error creating Dynamsoft barcode reader:', error);
@@ -623,34 +593,20 @@ export default function MobileScanner() {
             if (!codeReaderRef.current) {
               try {
                 // Ensure Dynamsoft is loaded
-                if (!dynamsoftSDK) {
-                  dynamsoftSDK = await import('dynamsoft-capture-vision-bundle');
-                }
-                
-                // Try DBR (Dynamsoft Barcode Reader) first - this is the standard API
-                const DBR = dynamsoftSDK.DBR || dynamsoftSDK.default?.DBR;
-                const BarcodeReaderModule = dynamsoftSDK.BarcodeReaderModule || dynamsoftSDK.default?.BarcodeReaderModule;
-                
-                // Try different methods to create instance
-                if (DBR) {
-                  // DBR is the standard Dynamsoft Barcode Reader module
-                  if (DBR.BarcodeReader && typeof DBR.BarcodeReader.createInstance === 'function') {
-                    codeReaderRef.current = await DBR.BarcodeReader.createInstance();
-                  } else if (DBR.BarcodeReader && typeof DBR.BarcodeReader === 'function') {
-                    codeReaderRef.current = new DBR.BarcodeReader();
-                  } else if (typeof DBR.createInstance === 'function') {
-                    codeReaderRef.current = await DBR.createInstance();
-                  } else {
-                    throw new Error('DBR found but no valid createInstance method');
+                if (!BarcodeReader) {
+                  const dynamsoftModule = await import('dynamsoft-javascript-barcode');
+                  BarcodeReader = dynamsoftModule.BarcodeReader;
+                  
+                  // Set license if not already set
+                  if (BarcodeReader.isWasmLoaded() === false) {
+                    const licenseKey = 'DLS2eyJoYW5kc2hha2VDb2RlIjoiMTA0OTkyMzAwLU1UQTBPVGt5TXpBd0xYZGxZaTFVY21saGJGQnliMm8iLCJtYWluU2VydmVyVVJMIjoiaHR0cHM6Ly9tZGxzLmR5bmFtc29mdG9ubGluZS5jb20iLCJvcmdhbml6YXRpb25JRCI6IjEwNDk5MjMwMCIsInN0YW5kYnlTZXJ2ZXJVUkwiOiJodHRwczovL3NkbHMuZHluYW1zb2Z0b25saW5lLmNvbSIsImNoZWNrQ29kZSI6MTYwOTU4NzI4OH0=';
+                    BarcodeReader.license = licenseKey;
+                    BarcodeReader.engineResourcePath = "https://cdn.jsdelivr.net/npm/dynamsoft-javascript-barcode@9.6.11/dist/";
                   }
-                } else if (BarcodeReaderModule?.createInstance) {
-                  codeReaderRef.current = await BarcodeReaderModule.createInstance();
-                } else if (BarcodeReaderModule && typeof BarcodeReaderModule === 'function') {
-                  // Try using it as a constructor
-                  codeReaderRef.current = new BarcodeReaderModule();
-                } else {
-                  throw new Error('BarcodeReader createInstance method not found');
                 }
+                
+                // Create barcode reader instance - using the same approach as NextJS-Barcode-Scanner
+                codeReaderRef.current = await BarcodeReader.createInstance();
                 
                 // Configure to prioritize PDF417 (boarding pass format)
                 if (codeReaderRef.current && codeReaderRef.current.getRuntimeSettings) {
@@ -658,7 +614,7 @@ export default function MobileScanner() {
                     const settings = await codeReaderRef.current.getRuntimeSettings();
                     
                     // Use Dynamsoft enum values for barcode formats
-                    const EnumBarcodeFormat = dynamsoftSDK.EnumBarcodeFormat || dynamsoftSDK.default?.EnumBarcodeFormat;
+                    const EnumBarcodeFormat = (await import('dynamsoft-javascript-barcode')).EnumBarcodeFormat;
                     
                     if (EnumBarcodeFormat) {
                       settings.barcodeFormatIds = EnumBarcodeFormat.BF_PDF417 | 
@@ -870,37 +826,15 @@ export default function MobileScanner() {
           // Draw video frame to canvas with high quality
           ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
           
-          // Try to decode barcode from canvas (better quality than direct video)
-          let results: any = null;
-          if (codeReader.recognize) {
-            results = await codeReader.recognize(canvas);
-          } else if (codeReader.recognizeImage) {
-            results = await codeReader.recognizeImage(canvas);
-          } else if (codeReader.decode) {
-            results = await codeReader.decode(canvas);
-          } else if (codeReader.detectBarcodes) {
-            results = await codeReader.detectBarcodes(canvas);
-          }
+          // Decode barcode from canvas using the correct API (same as NextJS-Barcode-Scanner)
+          // decode() returns an array of TextResult objects directly
+          const results = await codeReader.decode(canvas);
           
-          // Handle different result formats
+          // Handle results - decode() returns an array of TextResult objects
           let barcodeText: string | null = null;
-          if (results) {
-            // Check if results is an array
-            if (Array.isArray(results) && results.length > 0) {
-              barcodeText = results[0].barcodeText || results[0].text || results[0].textString;
-            } 
-            // Check if results has items array
-            else if (results.items && Array.isArray(results.items) && results.items.length > 0) {
-              barcodeText = results.items[0].barcodeText || results.items[0].text || results.items[0].textString;
-            }
-            // Check if results has decodedBarcodesResult
-            else if (results.decodedBarcodesResult && results.decodedBarcodesResult.barcodeResultItems && results.decodedBarcodesResult.barcodeResultItems.length > 0) {
-              barcodeText = results.decodedBarcodesResult.barcodeResultItems[0].barcodeText || results.decodedBarcodesResult.barcodeResultItems[0].text;
-            }
-            // Check if results is a single object
-            else if (results.barcodeText || results.text || results.textString) {
-              barcodeText = results.barcodeText || results.text || results.textString;
-            }
+          if (results && Array.isArray(results) && results.length > 0) {
+            // TextResult has barcodeText property
+            barcodeText = results[0].barcodeText;
           }
           
           if (barcodeText) {
@@ -1198,54 +1132,15 @@ export default function MobileScanner() {
       
       addNotification('info', 'Capturing...', 'Analyzing captured image for PDF417 barcode...');
       
-      // For PDF417, use canvas directly for better quality
-      // Try to decode from canvas (better quality than image conversion)
-      let results: any = null;
-      if (codeReader.recognize) {
-        results = await codeReader.recognize(canvas);
-      } else if (codeReader.recognizeImage) {
-        results = await codeReader.recognizeImage(canvas);
-      } else if (codeReader.decode) {
-        results = await codeReader.decode(canvas);
-      } else if (codeReader.detectBarcodes) {
-        results = await codeReader.detectBarcodes(canvas);
-      } else {
-        // Fallback: convert to image
-        const imageData = canvas.toDataURL('image/png');
-        const img = new Image();
-        img.src = imageData;
-        
-        await new Promise((resolve, reject) => {
-          img.onload = resolve;
-          img.onerror = reject;
-        });
-        
-        if (codeReader.recognize) {
-          results = await codeReader.recognize(img);
-        } else if (codeReader.recognizeImage) {
-          results = await codeReader.recognizeImage(img);
-        }
-      }
+      // Decode barcode from canvas using the correct API (same as NextJS-Barcode-Scanner)
+      // decode() returns an array of TextResult objects directly
+      const results = await codeReader.decode(canvas);
       
-      // Handle different result formats
+      // Handle results - decode() returns an array of TextResult objects
       let barcodeText: string | null = null;
-      if (results) {
-        // Check if results is an array
-        if (Array.isArray(results) && results.length > 0) {
-          barcodeText = results[0].barcodeText || results[0].text || results[0].textString;
-        } 
-        // Check if results has items array
-        else if (results.items && Array.isArray(results.items) && results.items.length > 0) {
-          barcodeText = results.items[0].barcodeText || results.items[0].text || results.items[0].textString;
-        }
-        // Check if results has decodedBarcodesResult
-        else if (results.decodedBarcodesResult && results.decodedBarcodesResult.barcodeResultItems && results.decodedBarcodesResult.barcodeResultItems.length > 0) {
-          barcodeText = results.decodedBarcodesResult.barcodeResultItems[0].barcodeText || results.decodedBarcodesResult.barcodeResultItems[0].text;
-        }
-        // Check if results is a single object
-        else if (results.barcodeText || results.text || results.textString) {
-          barcodeText = results.barcodeText || results.text || results.textString;
-        }
+      if (results && Array.isArray(results) && results.length > 0) {
+        // TextResult has barcodeText property
+        barcodeText = results[0].barcodeText;
       }
       
       if (barcodeText) {
