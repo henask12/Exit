@@ -328,8 +328,7 @@ export default function MobileScanner() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const codeReaderRef = useRef<BrowserMultiFormatReader | null>(null);
-  const scanningIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const scanningActiveRef = useRef<boolean>(false);
 
   // Get available flight numbers for the selected date
   const availableFlights = flights.filter(f => f.date === selectedDate);
@@ -512,81 +511,49 @@ export default function MobileScanner() {
   };
 
   // Start scanning boarding pass barcodes continuously
-  const startBoardingPassScanning = () => {
+  const startBoardingPassScanning = async () => {
     if (!videoRef.current || !codeReaderRef.current || !isScanning) {
       return;
     }
     
-    // Create canvas for capturing frames
-    if (!canvasRef.current) {
-      canvasRef.current = document.createElement('canvas');
-    }
-    
-    const canvas = canvasRef.current;
     const video = videoRef.current;
     const codeReader = codeReaderRef.current;
+    scanningActiveRef.current = true;
     
-    const scanFrame = async () => {
-      // Stop if camera is off, result is showing, or scanning stopped
-      if (!video || !canvas || !isScanning || scanResult || !streamRef.current) {
-        if (scanningIntervalRef.current) {
-          clearTimeout(scanningIntervalRef.current);
-          scanningIntervalRef.current = null;
-        }
-        return;
-      }
-      
-      try {
-        // Check if video has valid dimensions
-        if (video.videoWidth > 0 && video.videoHeight > 0) {
-          // Capture frame from video
-          canvas.width = video.videoWidth;
-          canvas.height = video.videoHeight;
-          const ctx = canvas.getContext('2d');
+    // Continuous scanning loop
+    const scanLoop = async () => {
+      while (scanningActiveRef.current && isScanning && !scanResult && streamRef.current) {
+        try {
+          // Try to decode barcode from video element
+          const result = await codeReader.decodeFromVideoElement(video);
           
-          if (ctx) {
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-            
-            // Try to decode barcode from the frame
-            try {
-              const result = await codeReader.decodeFromCanvas(canvas);
-              
-              if (result && result.getText()) {
-                // Barcode detected!
-                handleBoardingPassDetected(result.getText());
-                return; // Stop scanning loop, will resume after handling
-              }
-            } catch (decodeError) {
-              // NotFoundException means no barcode found - this is normal
-              if (!(decodeError instanceof NotFoundException)) {
-                // Only log non-NotFoundException errors
-                // console.error('Decode error:', decodeError);
-              }
-            }
+          if (result && result.getText()) {
+            // Barcode detected!
+            scanningActiveRef.current = false; // Stop scanning
+            handleBoardingPassDetected(result.getText());
+            return; // Exit loop
+          }
+        } catch (error) {
+          // NotFoundException is normal (no barcode found) - continue scanning
+          if (!(error instanceof NotFoundException)) {
+            // Only log non-NotFoundException errors
+            // console.error('Decode error:', error);
           }
         }
-      } catch (error) {
-        // Ignore errors and continue scanning
-        // console.error('Scanning error:', error);
-      }
-      
-      // Continue scanning if still active
-      if (isScanning && !scanResult && streamRef.current) {
-        scanningIntervalRef.current = setTimeout(scanFrame, 300); // Scan every 300ms
+        
+        // Small delay before next scan attempt
+        await new Promise(resolve => setTimeout(resolve, 300));
       }
     };
     
-    // Start scanning loop
-    scanFrame();
+    scanLoop().catch((err) => {
+      console.error('Error in scanning loop:', err);
+    });
   };
 
   // Handle detected boarding pass barcode
   const handleBoardingPassDetected = (barcodeText: string) => {
-    // Stop scanning temporarily
-    if (scanningIntervalRef.current) {
-      clearTimeout(scanningIntervalRef.current);
-      scanningIntervalRef.current = null;
-    }
+    // Scanning is already stopped when barcode is detected
     
     // Parse boarding pass data
     // Boarding pass barcodes contain encoded passenger info
@@ -661,8 +628,8 @@ export default function MobileScanner() {
       if (barcodeText.includes(p.seat)) return true;
       
       // Try name fragments (boarding passes often contain name parts)
-      const nameParts = p.name.split('/').map(part => part.trim().toUpperCase());
-      if (nameParts.some(part => part.length > 2 && barcodeText.toUpperCase().includes(part))) {
+      const nameParts = p.name.split('/').map((part: string) => part.trim().toUpperCase());
+      if (nameParts.some((part: string) => part.length > 2 && barcodeText.toUpperCase().includes(part))) {
         return true;
       }
       
@@ -680,14 +647,16 @@ export default function MobileScanner() {
 
   // Stop camera
   const stopCamera = () => {
-    // Stop barcode scanning
-    if (scanningIntervalRef.current) {
-      clearTimeout(scanningIntervalRef.current);
-      scanningIntervalRef.current = null;
-    }
+    // Stop barcode scanning loop
+    scanningActiveRef.current = false;
     
+    // Stop barcode reader
     if (codeReaderRef.current) {
-      codeReaderRef.current.reset();
+      try {
+        codeReaderRef.current.reset();
+      } catch (error) {
+        // Ignore reset errors
+      }
     }
     
     if (streamRef.current) {
