@@ -343,7 +343,8 @@ export default function MobileScanner() {
         // Try to initialize license - the API might vary by version
         // Initialize with a trial license - replace with your actual license key
         // Get a free 30-day trial at: https://www.dynamsoft.com/capture-vision/confirmation/
-        const licenseKey = 'DLS2eyJvcmdhbml6YXRpb25JRCI6IjIwMDAwMSJ9'; // Public trial license
+        // const licenseKey = 'DLS2eyJvcmdhbml6YXRpb25JRCI6IjIwMDAwMSJ9'; // Public trial license
+        const licenseKey = 'DLS2eyJoYW5kc2hha2VDb2RlIjoiMTA0OTkyMzAwLU1UQTBPVGt5TXpBd0xYZGxZaTFVY21saGJGQnliMm8iLCJtYWluU2VydmVyVVJMIjoiaHR0cHM6Ly9tZGxzLmR5bmFtc29mdG9ubGluZS5jb20iLCJvcmdhbml6YXRpb25JRCI6IjEwNDk5MjMwMCIsInN0YW5kYnlTZXJ2ZXJVUkwiOiJodHRwczovL3NkbHMuZHluYW1zb2Z0b25saW5lLmNvbSIsImNoZWNrQ29kZSI6MTYwOTU4NzI4OH0=';
         
         // Try different possible API structures
         if (dynamsoftSDK.CoreModule?.initLicense) {
@@ -489,21 +490,41 @@ export default function MobileScanner() {
               dynamsoftSDK = await import('dynamsoft-capture-vision-bundle');
             }
             
+            // Debug: Log available exports
+            console.log('Dynamsoft SDK exports:', Object.keys(dynamsoftSDK));
+            
+            // Try DBR (Dynamsoft Barcode Reader) first - this is the standard API
+            const DBR = dynamsoftSDK.DBR || dynamsoftSDK.default?.DBR;
             const BarcodeReaderModule = dynamsoftSDK.BarcodeReaderModule || dynamsoftSDK.default?.BarcodeReaderModule;
             
             // Try different methods to create instance
-            if (BarcodeReaderModule?.createInstance) {
+            if (DBR) {
+              // DBR is the standard Dynamsoft Barcode Reader module
+              if (DBR.BarcodeReader && typeof DBR.BarcodeReader.createInstance === 'function') {
+                codeReaderRef.current = await DBR.BarcodeReader.createInstance();
+              } else if (DBR.BarcodeReader && typeof DBR.BarcodeReader === 'function') {
+                codeReaderRef.current = new DBR.BarcodeReader();
+              } else if (typeof DBR.createInstance === 'function') {
+                codeReaderRef.current = await DBR.createInstance();
+              } else {
+                throw new Error('DBR found but no valid createInstance method');
+              }
+            } else if (BarcodeReaderModule?.createInstance) {
               codeReaderRef.current = await BarcodeReaderModule.createInstance();
-            } else if (BarcodeReaderModule?.default?.createInstance) {
-              codeReaderRef.current = await BarcodeReaderModule.default.createInstance();
-            } else if (dynamsoftSDK.BarcodeReader?.createInstance) {
-              codeReaderRef.current = await dynamsoftSDK.BarcodeReader.createInstance();
+            } else if (BarcodeReaderModule && typeof BarcodeReaderModule === 'function') {
+              // Try using it as a constructor
+              codeReaderRef.current = new BarcodeReaderModule();
             } else {
-              throw new Error('BarcodeReader createInstance method not found');
+              // Try to find any barcode-related class
+              const possibleClasses = Object.keys(dynamsoftSDK).filter(key => 
+                key.toLowerCase().includes('barcode') || key.toLowerCase().includes('reader') || key === 'DBR'
+              );
+              console.log('Possible barcode classes:', possibleClasses);
+              throw new Error(`BarcodeReader createInstance method not found. Available: ${Object.keys(dynamsoftSDK).slice(0, 10).join(', ')}`);
             }
             
             // Configure to prioritize PDF417 (boarding pass format)
-            if (codeReaderRef.current.getRuntimeSettings) {
+            if (codeReaderRef.current && codeReaderRef.current.getRuntimeSettings) {
               const settings = await codeReaderRef.current.getRuntimeSettings();
               // Set barcode formats - PDF417 is most important for boarding passes
               settings.barcodeFormatIds = 0x00000001 | // PDF417
@@ -515,6 +536,7 @@ export default function MobileScanner() {
             console.log('Dynamsoft barcode reader initialized');
           } catch (error) {
             console.error('Error creating Dynamsoft barcode reader:', error);
+            console.error('Full error details:', error);
             addNotification('error', 'Scanner initialization failed', 'Could not initialize barcode scanner. Please refresh the page.');
           }
         }
@@ -578,21 +600,33 @@ export default function MobileScanner() {
                   dynamsoftSDK = await import('dynamsoft-capture-vision-bundle');
                 }
                 
+                // Try DBR (Dynamsoft Barcode Reader) first - this is the standard API
+                const DBR = dynamsoftSDK.DBR || dynamsoftSDK.default?.DBR;
                 const BarcodeReaderModule = dynamsoftSDK.BarcodeReaderModule || dynamsoftSDK.default?.BarcodeReaderModule;
                 
                 // Try different methods to create instance
-                if (BarcodeReaderModule?.createInstance) {
+                if (DBR) {
+                  // DBR is the standard Dynamsoft Barcode Reader module
+                  if (DBR.BarcodeReader && typeof DBR.BarcodeReader.createInstance === 'function') {
+                    codeReaderRef.current = await DBR.BarcodeReader.createInstance();
+                  } else if (DBR.BarcodeReader && typeof DBR.BarcodeReader === 'function') {
+                    codeReaderRef.current = new DBR.BarcodeReader();
+                  } else if (typeof DBR.createInstance === 'function') {
+                    codeReaderRef.current = await DBR.createInstance();
+                  } else {
+                    throw new Error('DBR found but no valid createInstance method');
+                  }
+                } else if (BarcodeReaderModule?.createInstance) {
                   codeReaderRef.current = await BarcodeReaderModule.createInstance();
-                } else if (BarcodeReaderModule?.default?.createInstance) {
-                  codeReaderRef.current = await BarcodeReaderModule.default.createInstance();
-                } else if (dynamsoftSDK.BarcodeReader?.createInstance) {
-                  codeReaderRef.current = await dynamsoftSDK.BarcodeReader.createInstance();
+                } else if (BarcodeReaderModule && typeof BarcodeReaderModule === 'function') {
+                  // Try using it as a constructor
+                  codeReaderRef.current = new BarcodeReaderModule();
                 } else {
                   throw new Error('BarcodeReader createInstance method not found');
                 }
                 
                 // Configure to prioritize PDF417 (boarding pass format)
-                if (codeReaderRef.current.getRuntimeSettings) {
+                if (codeReaderRef.current && codeReaderRef.current.getRuntimeSettings) {
                   const settings = await codeReaderRef.current.getRuntimeSettings();
                   // Set barcode formats - PDF417 is most important for boarding passes
                   settings.barcodeFormatIds = 0x00000001 | // PDF417
