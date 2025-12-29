@@ -541,7 +541,7 @@ export default function MobileScanner() {
   const startBoardingPassScanning = async () => {
     // Check if we have the necessary refs and stream (more reliable than state)
     if (!videoRef.current || !codeReaderRef.current || !streamRef.current) {
-      const missingResources = [];
+      const missingResources: string[] = [];
       if (!videoRef.current) missingResources.push('video');
       if (!codeReaderRef.current) missingResources.push('barcode reader');
       if (!streamRef.current) missingResources.push('camera stream');
