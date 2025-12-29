@@ -431,12 +431,16 @@ export default function MobileScanner() {
         videoRef.current.setAttribute('webkit-playsinline', 'true');
         videoRef.current.muted = true; // Required for autoplay in many browsers
         
-        // Ensure video plays
+        // Ensure video plays (suppress "already playing" warnings)
         try {
-          await videoRef.current.play();
-        } catch (playError) {
-          console.error('Error playing video:', playError);
-          // Video should still work with autoplay attribute
+          if (videoRef.current.paused) {
+            await videoRef.current.play();
+          }
+        } catch (playError: any) {
+          // Ignore "already playing" errors - these are harmless
+          if (playError.name !== 'NotAllowedError' && !playError.message?.includes('already playing')) {
+            console.error('Error playing video:', playError);
+          }
         }
         
         setIsScanning(true);
@@ -483,11 +487,16 @@ export default function MobileScanner() {
             videoRef.current.setAttribute('webkit-playsinline', 'true');
             videoRef.current.muted = true; // Required for autoplay in many browsers
             
-            // Ensure video plays
+            // Ensure video plays (suppress "already playing" warnings)
             try {
-              await videoRef.current.play();
-            } catch (playError) {
-              console.error('Error playing video:', playError);
+              if (videoRef.current.paused) {
+                await videoRef.current.play();
+              }
+            } catch (playError: any) {
+              // Ignore "already playing" errors - these are harmless
+              if (playError.name !== 'NotAllowedError' && !playError.message?.includes('already playing')) {
+                console.error('Error playing video:', playError);
+              }
             }
             
             setIsScanning(true);
@@ -530,12 +539,37 @@ export default function MobileScanner() {
 
   // Start scanning boarding pass barcodes continuously
   const startBoardingPassScanning = async () => {
-    if (!videoRef.current || !codeReaderRef.current || !isScanning) {
-      console.log('Cannot start scanning:', { 
+    // Check if we have the necessary refs and stream (more reliable than state)
+    if (!videoRef.current || !codeReaderRef.current || !streamRef.current) {
+      const missingResources = [];
+      if (!videoRef.current) missingResources.push('video');
+      if (!codeReaderRef.current) missingResources.push('barcode reader');
+      if (!streamRef.current) missingResources.push('camera stream');
+      
+      console.log('Cannot start scanning - waiting for resources:', { 
         hasVideo: !!videoRef.current, 
         hasReader: !!codeReaderRef.current, 
-        isScanning 
+        hasStream: !!streamRef.current,
+        missing: missingResources
       });
+      
+      // Retry after a short delay if we're missing resources
+      // This handles race conditions where refs aren't set yet
+      setTimeout(() => {
+        if (videoRef.current && codeReaderRef.current && streamRef.current) {
+          console.log('Resources now available, retrying scan start...');
+          startBoardingPassScanning();
+        } else {
+          console.log('Resources still not available after retry');
+          addNotification('warning', 'Scanning delayed', `Waiting for: ${missingResources.join(', ')}. Please ensure camera is started.`);
+        }
+      }, 500);
+      return;
+    }
+    
+    // Double-check we're not already scanning
+    if (scanningActiveRef.current) {
+      console.log('Scanning already active, skipping...');
       return;
     }
     
@@ -580,7 +614,8 @@ export default function MobileScanner() {
     // Continuous scanning loop
     const scanLoop = async () => {
       let scanCount = 0;
-      while (scanningActiveRef.current && isScanning && streamRef.current) {
+      // Use streamRef as the primary check since it's more reliable than state
+      while (scanningActiveRef.current && streamRef.current) {
         // Skip if we have a scan result showing
         if (scanResult) {
           await new Promise(resolve => setTimeout(resolve, 100));
@@ -799,7 +834,7 @@ export default function MobileScanner() {
     // Resume scanning after 3 seconds (longer to read the details)
     setTimeout(() => {
       setScanResult(null);
-      if (isScanning && streamRef.current) {
+      if (streamRef.current) {
         addNotification('info', 'Resuming scan...', 'Ready to scan next boarding pass');
         startBoardingPassScanning();
       }
@@ -912,19 +947,29 @@ export default function MobileScanner() {
 
   // Ensure video plays when stream is set and start scanning when ready
   useEffect(() => {
-    if (videoRef.current && streamRef.current && isScanning) {
+    // Check streamRef instead of isScanning to avoid race conditions
+    if (videoRef.current && streamRef.current) {
       const video = videoRef.current;
       if (video.paused) {
-        video.play().catch((error) => {
-          console.error('Error playing video in useEffect:', error);
+        video.play().catch((error: any) => {
+          // Ignore "already playing" errors - these are harmless
+          if (error.name !== 'NotAllowedError' && !error.message?.includes('already playing')) {
+            console.error('Error playing video in useEffect:', error);
+          }
         });
       }
       
-      // Start scanning when video is ready
+      // Start scanning when video is ready (only if not already scanning)
       const handleVideoReady = () => {
-        if (video.readyState >= 2 && video.videoWidth > 0 && !scanningActiveRef.current) {
+        // Check streamRef instead of isScanning state to avoid race conditions
+        if (video.readyState >= 2 && video.videoWidth > 0 && streamRef.current && !scanningActiveRef.current) {
           console.log('Video ready, starting scan...');
-          startBoardingPassScanning();
+          // Small delay to ensure everything is ready
+          setTimeout(() => {
+            if (streamRef.current && !scanningActiveRef.current && videoRef.current && codeReaderRef.current) {
+              startBoardingPassScanning();
+            }
+          }, 200);
         }
       };
       
@@ -943,7 +988,7 @@ export default function MobileScanner() {
       };
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isScanning]);
+  }, [isScanning]); // Keep isScanning as dependency but check streamRef inside
 
   // Start camera automatically when camera view opens, and cleanup on exit
   useEffect(() => {
@@ -1232,7 +1277,12 @@ export default function MobileScanner() {
                       // Ensure video plays when metadata is loaded
                       const video = e.currentTarget;
                       if (video.paused) {
-                        video.play().catch(console.error);
+                        video.play().catch((error: any) => {
+                          // Ignore "already playing" errors - these are harmless
+                          if (error.name !== 'NotAllowedError' && !error.message?.includes('already playing')) {
+                            console.error('Error playing video:', error);
+                          }
+                        });
                       }
                     }}
                   />
