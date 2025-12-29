@@ -2,7 +2,8 @@
 
 import { useState, useRef, useEffect } from 'react';
 import Header from '../components/Header';
-import { BarcodeReader } from 'dynamsoft-capture-vision-bundle';
+// Dynamsoft will be imported dynamically to avoid SSR issues
+let dynamsoftSDK: any = null;
 
 // Sample flights data
 const flights = [
@@ -336,13 +337,27 @@ export default function MobileScanner() {
   useEffect(() => {
     const initDynamsoft = async () => {
       try {
+        // Dynamically import Dynamsoft to avoid SSR issues
+        dynamsoftSDK = await import('dynamsoft-capture-vision-bundle');
+        
+        // Try to initialize license - the API might vary by version
         // Initialize with a trial license - replace with your actual license key
         // Get a free 30-day trial at: https://www.dynamsoft.com/capture-vision/confirmation/
-        await BarcodeReader.initLicense('DLS2eyJvcmdhbml6YXRpb25JRCI6IjIwMDAwMSJ9'); // Public trial license
-        console.log('Dynamsoft license initialized');
+        const licenseKey = 'DLS2eyJvcmdhbml6YXRpb25JRCI6IjIwMDAwMSJ9'; // Public trial license
+        
+        // Try different possible API structures
+        if (dynamsoftSDK.CoreModule?.initLicense) {
+          await dynamsoftSDK.CoreModule.initLicense(licenseKey);
+        } else if (dynamsoftSDK.initLicense) {
+          await dynamsoftSDK.initLicense(licenseKey);
+        } else if (dynamsoftSDK.default?.initLicense) {
+          await dynamsoftSDK.default.initLicense(licenseKey);
+        } else {
+          console.warn('License initialization method not found, will try when creating reader');
+        }
+        console.log('Dynamsoft SDK loaded');
       } catch (error) {
-        console.error('Error initializing Dynamsoft license:', error);
-        // Note: addNotification might not be available yet, so we'll log it
+        console.error('Error loading Dynamsoft SDK:', error);
         console.warn('Using trial license. For production, please configure your license key.');
       }
     };
@@ -469,15 +484,34 @@ export default function MobileScanner() {
         // Initialize Dynamsoft barcode reader for boarding passes
         if (!codeReaderRef.current) {
           try {
-            codeReaderRef.current = await BarcodeReader.createInstance();
+            // Ensure Dynamsoft is loaded
+            if (!dynamsoftSDK) {
+              dynamsoftSDK = await import('dynamsoft-capture-vision-bundle');
+            }
+            
+            const BarcodeReaderModule = dynamsoftSDK.BarcodeReaderModule || dynamsoftSDK.default?.BarcodeReaderModule;
+            
+            // Try different methods to create instance
+            if (BarcodeReaderModule?.createInstance) {
+              codeReaderRef.current = await BarcodeReaderModule.createInstance();
+            } else if (BarcodeReaderModule?.default?.createInstance) {
+              codeReaderRef.current = await BarcodeReaderModule.default.createInstance();
+            } else if (dynamsoftSDK.BarcodeReader?.createInstance) {
+              codeReaderRef.current = await dynamsoftSDK.BarcodeReader.createInstance();
+            } else {
+              throw new Error('BarcodeReader createInstance method not found');
+            }
+            
             // Configure to prioritize PDF417 (boarding pass format)
-            const settings = await codeReaderRef.current.getRuntimeSettings();
-            // Set barcode formats - PDF417 is most important for boarding passes
-            settings.barcodeFormatIds = 0x00000001 | // PDF417
-                                       0x00000002 | // QR_CODE
-                                       0x00000008 | // DATA_MATRIX
-                                       0x00000010;  // AZTEC
-            await codeReaderRef.current.updateRuntimeSettings(settings);
+            if (codeReaderRef.current.getRuntimeSettings) {
+              const settings = await codeReaderRef.current.getRuntimeSettings();
+              // Set barcode formats - PDF417 is most important for boarding passes
+              settings.barcodeFormatIds = 0x00000001 | // PDF417
+                                         0x00000002 | // QR_CODE
+                                         0x00000008 | // DATA_MATRIX
+                                         0x00000010;  // AZTEC
+              await codeReaderRef.current.updateRuntimeSettings(settings);
+            }
             console.log('Dynamsoft barcode reader initialized');
           } catch (error) {
             console.error('Error creating Dynamsoft barcode reader:', error);
@@ -539,15 +573,34 @@ export default function MobileScanner() {
             // Initialize Dynamsoft barcode reader for boarding passes
             if (!codeReaderRef.current) {
               try {
-                codeReaderRef.current = await BarcodeReader.createInstance();
+                // Ensure Dynamsoft is loaded
+                if (!dynamsoftSDK) {
+                  dynamsoftSDK = await import('dynamsoft-capture-vision-bundle');
+                }
+                
+                const BarcodeReaderModule = dynamsoftSDK.BarcodeReaderModule || dynamsoftSDK.default?.BarcodeReaderModule;
+                
+                // Try different methods to create instance
+                if (BarcodeReaderModule?.createInstance) {
+                  codeReaderRef.current = await BarcodeReaderModule.createInstance();
+                } else if (BarcodeReaderModule?.default?.createInstance) {
+                  codeReaderRef.current = await BarcodeReaderModule.default.createInstance();
+                } else if (dynamsoftSDK.BarcodeReader?.createInstance) {
+                  codeReaderRef.current = await dynamsoftSDK.BarcodeReader.createInstance();
+                } else {
+                  throw new Error('BarcodeReader createInstance method not found');
+                }
+                
                 // Configure to prioritize PDF417 (boarding pass format)
-                const settings = await codeReaderRef.current.getRuntimeSettings();
-                // Set barcode formats - PDF417 is most important for boarding passes
-                settings.barcodeFormatIds = 0x00000001 | // PDF417
-                                           0x00000002 | // QR_CODE
-                                           0x00000008 | // DATA_MATRIX
-                                           0x00000010;  // AZTEC
-                await codeReaderRef.current.updateRuntimeSettings(settings);
+                if (codeReaderRef.current.getRuntimeSettings) {
+                  const settings = await codeReaderRef.current.getRuntimeSettings();
+                  // Set barcode formats - PDF417 is most important for boarding passes
+                  settings.barcodeFormatIds = 0x00000001 | // PDF417
+                                             0x00000002 | // QR_CODE
+                                             0x00000008 | // DATA_MATRIX
+                                             0x00000010;  // AZTEC
+                  await codeReaderRef.current.updateRuntimeSettings(settings);
+                }
                 console.log('Dynamsoft barcode reader initialized');
               } catch (error) {
                 console.error('Error creating Dynamsoft barcode reader:', error);
@@ -614,6 +667,10 @@ export default function MobileScanner() {
       return;
     }
     
+    // Get video and codeReader references
+    const video = videoRef.current;
+    const codeReader = codeReaderRef.current;
+    
     // Double-check we're not already scanning
     // If stuck, reset the flag immediately if video isn't ready
     if (scanningActiveRef.current) {
@@ -639,9 +696,6 @@ export default function MobileScanner() {
       }, 3000);
       return;
     }
-    
-    const video = videoRef.current;
-    const codeReader = codeReaderRef.current;
     
     // Wait for video to be ready with better retry logic
     let retries = 0;
