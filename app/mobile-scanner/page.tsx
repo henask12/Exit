@@ -801,11 +801,51 @@ export default function MobileScanner() {
           }
           
           // Try to decode barcode from video element using Dynamsoft
-          const results = await codeReader.decode(video);
+          // Dynamsoft BarcodeReaderModule uses recognize() method, not decode()
+          let results: any = null;
+          if (codeReader.recognize) {
+            results = await codeReader.recognize(video);
+          } else if (codeReader.decode) {
+            results = await codeReader.decode(video);
+          } else if (codeReader.detectBarcodes) {
+            results = await codeReader.detectBarcodes(video);
+          } else {
+            // Try to get image data from video and use recognizeImage
+            const canvas = document.createElement('canvas');
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            const ctx = canvas.getContext('2d');
+            if (ctx) {
+              ctx.drawImage(video, 0, 0);
+              if (codeReader.recognizeImage) {
+                results = await codeReader.recognizeImage(canvas);
+              }
+            }
+          }
           
-          if (results && results.length > 0 && results[0].barcodeText) {
+          // Handle different result formats
+          let barcodeText: string | null = null;
+          if (results) {
+            // Check if results is an array
+            if (Array.isArray(results) && results.length > 0) {
+              barcodeText = results[0].barcodeText || results[0].text || results[0].textString;
+            } 
+            // Check if results has items array
+            else if (results.items && Array.isArray(results.items) && results.items.length > 0) {
+              barcodeText = results.items[0].barcodeText || results.items[0].text || results.items[0].textString;
+            }
+            // Check if results has decodedBarcodesResult
+            else if (results.decodedBarcodesResult && results.decodedBarcodesResult.barcodeResultItems && results.decodedBarcodesResult.barcodeResultItems.length > 0) {
+              barcodeText = results.decodedBarcodesResult.barcodeResultItems[0].barcodeText || results.decodedBarcodesResult.barcodeResultItems[0].text;
+            }
+            // Check if results is a single object
+            else if (results.barcodeText || results.text || results.textString) {
+              barcodeText = results.barcodeText || results.text || results.textString;
+            }
+          }
+          
+          if (barcodeText) {
             // Barcode detected!
-            const barcodeText = results[0].barcodeText;
             console.log('Barcode detected:', barcodeText);
             scanningActiveRef.current = false; // Stop scanning
             handleBoardingPassDetected(barcodeText);
@@ -1110,11 +1150,41 @@ export default function MobileScanner() {
       });
       
       // Try to decode from image using Dynamsoft
-      const results = await codeReader.decode(img);
+      // Dynamsoft BarcodeReaderModule uses recognize() method, not decode()
+      let results: any = null;
+      if (codeReader.recognize) {
+        results = await codeReader.recognize(img);
+      } else if (codeReader.decode) {
+        results = await codeReader.decode(img);
+      } else if (codeReader.detectBarcodes) {
+        results = await codeReader.detectBarcodes(img);
+      } else if (codeReader.recognizeImage) {
+        results = await codeReader.recognizeImage(img);
+      }
       
-      if (results && results.length > 0 && results[0].barcodeText) {
+      // Handle different result formats
+      let barcodeText: string | null = null;
+      if (results) {
+        // Check if results is an array
+        if (Array.isArray(results) && results.length > 0) {
+          barcodeText = results[0].barcodeText || results[0].text || results[0].textString;
+        } 
+        // Check if results has items array
+        else if (results.items && Array.isArray(results.items) && results.items.length > 0) {
+          barcodeText = results.items[0].barcodeText || results.items[0].text || results.items[0].textString;
+        }
+        // Check if results has decodedBarcodesResult
+        else if (results.decodedBarcodesResult && results.decodedBarcodesResult.barcodeResultItems && results.decodedBarcodesResult.barcodeResultItems.length > 0) {
+          barcodeText = results.decodedBarcodesResult.barcodeResultItems[0].barcodeText || results.decodedBarcodesResult.barcodeResultItems[0].text;
+        }
+        // Check if results is a single object
+        else if (results.barcodeText || results.text || results.textString) {
+          barcodeText = results.barcodeText || results.text || results.textString;
+        }
+      }
+      
+      if (barcodeText) {
         // Barcode detected!
-        const barcodeText = results[0].barcodeText;
         console.log('Barcode detected from capture:', barcodeText);
         handleBoardingPassDetected(barcodeText);
         // Don't resume scanning - handleBoardingPassDetected will handle it
