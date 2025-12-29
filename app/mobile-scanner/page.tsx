@@ -523,16 +523,43 @@ export default function MobileScanner() {
               throw new Error(`BarcodeReader createInstance method not found. Available: ${Object.keys(dynamsoftSDK).slice(0, 10).join(', ')}`);
             }
             
-            // Configure to prioritize PDF417 (boarding pass format)
-            if (codeReaderRef.current && codeReaderRef.current.getRuntimeSettings) {
-              const settings = await codeReaderRef.current.getRuntimeSettings();
-              // Set barcode formats - PDF417 is most important for boarding passes
-              settings.barcodeFormatIds = 0x00000001 | // PDF417
-                                         0x00000002 | // QR_CODE
-                                         0x00000008 | // DATA_MATRIX
-                                         0x00000010;  // AZTEC
-              await codeReaderRef.current.updateRuntimeSettings(settings);
-            }
+                // Configure to prioritize PDF417 (boarding pass format)
+                if (codeReaderRef.current && codeReaderRef.current.getRuntimeSettings) {
+                  try {
+                    const settings = await codeReaderRef.current.getRuntimeSettings();
+                    
+                    // Use Dynamsoft enum values for barcode formats
+                    const EnumBarcodeFormat = dynamsoftSDK.EnumBarcodeFormat || dynamsoftSDK.default?.EnumBarcodeFormat;
+                    
+                    if (EnumBarcodeFormat) {
+                      settings.barcodeFormatIds = EnumBarcodeFormat.BF_PDF417 | 
+                                                  EnumBarcodeFormat.BF_QR_CODE | 
+                                                  EnumBarcodeFormat.BF_DATAMATRIX | 
+                                                  EnumBarcodeFormat.BF_AZTEC;
+                    } else {
+                      settings.barcodeFormatIds = BigInt(0x02000000) | // PDF417
+                                                 BigInt(0x04000000) | // QR_CODE
+                                                 BigInt(0x08000000) | // DATA_MATRIX
+                                                 BigInt(0x10000000);  // AZTEC
+                    }
+                    
+                    if (settings.pdf417Settings) {
+                      settings.pdf417Settings = settings.pdf417Settings || {};
+                      if (settings.pdf417Settings.scanStep !== undefined) {
+                        settings.pdf417Settings.scanStep = 2;
+                      }
+                    }
+                    
+                    if (settings.expectedBarcodesCount !== undefined) {
+                      settings.expectedBarcodesCount = 1;
+                    }
+                    
+                    await codeReaderRef.current.updateRuntimeSettings(settings);
+                    console.log('Barcode reader configured for PDF417 with optimized settings');
+                  } catch (configError) {
+                    console.warn('Could not configure barcode reader settings:', configError);
+                  }
+                }
             console.log('Dynamsoft barcode reader initialized');
           } catch (error) {
             console.error('Error creating Dynamsoft barcode reader:', error);
@@ -627,13 +654,40 @@ export default function MobileScanner() {
                 
                 // Configure to prioritize PDF417 (boarding pass format)
                 if (codeReaderRef.current && codeReaderRef.current.getRuntimeSettings) {
-                  const settings = await codeReaderRef.current.getRuntimeSettings();
-                  // Set barcode formats - PDF417 is most important for boarding passes
-                  settings.barcodeFormatIds = 0x00000001 | // PDF417
-                                             0x00000002 | // QR_CODE
-                                             0x00000008 | // DATA_MATRIX
-                                             0x00000010;  // AZTEC
-                  await codeReaderRef.current.updateRuntimeSettings(settings);
+                  try {
+                    const settings = await codeReaderRef.current.getRuntimeSettings();
+                    
+                    // Use Dynamsoft enum values for barcode formats
+                    const EnumBarcodeFormat = dynamsoftSDK.EnumBarcodeFormat || dynamsoftSDK.default?.EnumBarcodeFormat;
+                    
+                    if (EnumBarcodeFormat) {
+                      settings.barcodeFormatIds = EnumBarcodeFormat.BF_PDF417 | 
+                                                  EnumBarcodeFormat.BF_QR_CODE | 
+                                                  EnumBarcodeFormat.BF_DATAMATRIX | 
+                                                  EnumBarcodeFormat.BF_AZTEC;
+                    } else {
+                      settings.barcodeFormatIds = BigInt(0x02000000) | // PDF417
+                                                 BigInt(0x04000000) | // QR_CODE
+                                                 BigInt(0x08000000) | // DATA_MATRIX
+                                                 BigInt(0x10000000);  // AZTEC
+                    }
+                    
+                    if (settings.pdf417Settings) {
+                      settings.pdf417Settings = settings.pdf417Settings || {};
+                      if (settings.pdf417Settings.scanStep !== undefined) {
+                        settings.pdf417Settings.scanStep = 2;
+                      }
+                    }
+                    
+                    if (settings.expectedBarcodesCount !== undefined) {
+                      settings.expectedBarcodesCount = 1;
+                    }
+                    
+                    await codeReaderRef.current.updateRuntimeSettings(settings);
+                    console.log('Barcode reader configured for PDF417 with optimized settings');
+                  } catch (configError) {
+                    console.warn('Could not configure barcode reader settings:', configError);
+                  }
                 }
                 console.log('Dynamsoft barcode reader initialized');
               } catch (error) {
@@ -800,27 +854,32 @@ export default function MobileScanner() {
             continue;
           }
           
-          // Try to decode barcode from video element using Dynamsoft
-          // Dynamsoft BarcodeReaderModule uses recognize() method, not decode()
+          // For PDF417, use canvas-based scanning for better image quality
+          // PDF417 requires high resolution and sharp images
+          const canvas = document.createElement('canvas');
+          // Use full video resolution for better quality
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
+          const ctx = canvas.getContext('2d', { willReadFrequently: true });
+          
+          if (!ctx) {
+            await new Promise(resolve => setTimeout(resolve, 200));
+            continue;
+          }
+          
+          // Draw video frame to canvas with high quality
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          
+          // Try to decode barcode from canvas (better quality than direct video)
           let results: any = null;
           if (codeReader.recognize) {
-            results = await codeReader.recognize(video);
+            results = await codeReader.recognize(canvas);
+          } else if (codeReader.recognizeImage) {
+            results = await codeReader.recognizeImage(canvas);
           } else if (codeReader.decode) {
-            results = await codeReader.decode(video);
+            results = await codeReader.decode(canvas);
           } else if (codeReader.detectBarcodes) {
-            results = await codeReader.detectBarcodes(video);
-          } else {
-            // Try to get image data from video and use recognizeImage
-            const canvas = document.createElement('canvas');
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
-            const ctx = canvas.getContext('2d');
-            if (ctx) {
-              ctx.drawImage(video, 0, 0);
-              if (codeReader.recognizeImage) {
-                results = await codeReader.recognizeImage(canvas);
-              }
-            }
+            results = await codeReader.detectBarcodes(canvas);
           }
           
           // Handle different result formats
@@ -1134,32 +1193,38 @@ export default function MobileScanner() {
         return;
       }
       
-      // Draw current video frame to canvas
+      // Draw current video frame to canvas with high quality
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       
-      addNotification('info', 'Capturing...', 'Analyzing captured image for barcode...');
+      addNotification('info', 'Capturing...', 'Analyzing captured image for PDF417 barcode...');
       
-      // Convert canvas to image and decode
-      const imageData = canvas.toDataURL('image/png');
-      const img = new Image();
-      img.src = imageData;
-      
-      await new Promise((resolve, reject) => {
-        img.onload = resolve;
-        img.onerror = reject;
-      });
-      
-      // Try to decode from image using Dynamsoft
-      // Dynamsoft BarcodeReaderModule uses recognize() method, not decode()
+      // For PDF417, use canvas directly for better quality
+      // Try to decode from canvas (better quality than image conversion)
       let results: any = null;
       if (codeReader.recognize) {
-        results = await codeReader.recognize(img);
-      } else if (codeReader.decode) {
-        results = await codeReader.decode(img);
-      } else if (codeReader.detectBarcodes) {
-        results = await codeReader.detectBarcodes(img);
+        results = await codeReader.recognize(canvas);
       } else if (codeReader.recognizeImage) {
-        results = await codeReader.recognizeImage(img);
+        results = await codeReader.recognizeImage(canvas);
+      } else if (codeReader.decode) {
+        results = await codeReader.decode(canvas);
+      } else if (codeReader.detectBarcodes) {
+        results = await codeReader.detectBarcodes(canvas);
+      } else {
+        // Fallback: convert to image
+        const imageData = canvas.toDataURL('image/png');
+        const img = new Image();
+        img.src = imageData;
+        
+        await new Promise((resolve, reject) => {
+          img.onload = resolve;
+          img.onerror = reject;
+        });
+        
+        if (codeReader.recognize) {
+          results = await codeReader.recognize(img);
+        } else if (codeReader.recognizeImage) {
+          results = await codeReader.recognizeImage(img);
+        }
       }
       
       // Handle different result formats
