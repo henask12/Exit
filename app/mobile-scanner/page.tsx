@@ -551,66 +551,125 @@ export default function MobileScanner() {
     });
   };
 
+  // Parse boarding pass barcode data (IATA format)
+  const parseBoardingPass = (barcodeText: string) => {
+    // Boarding pass barcodes typically follow IATA format
+    // Format: M1LASTNAME/FIRSTNAME MIDDLE E1234567890 1A 15F 0123 1234567890123 1
+    // Or simpler formats with encoded data
+    
+    const parsed: any = {
+      raw: barcodeText,
+      passengerName: '',
+      flightNumber: '',
+      date: '',
+      seat: '',
+      pnr: '',
+      class: '',
+      sequence: '',
+      airline: ''
+    };
+    
+    try {
+      // Try to parse IATA format
+      // Common pattern: Name/First E1234567890 Flight Seat Date PNR
+      const parts = barcodeText.split(' ');
+      
+      // Look for name pattern (LASTNAME/FIRSTNAME)
+      const nameMatch = barcodeText.match(/([A-Z]+\/[A-Z]+)/);
+      if (nameMatch) {
+        const nameParts = nameMatch[1].split('/');
+        parsed.passengerName = `${nameParts[1]} ${nameParts[0]}`;
+      }
+      
+      // Look for flight number pattern (e.g., EK123, AA456)
+      const flightMatch = barcodeText.match(/([A-Z]{2,3}\d{3,4})/);
+      if (flightMatch) {
+        parsed.flightNumber = flightMatch[1];
+        parsed.airline = flightMatch[1].substring(0, 2);
+      }
+      
+      // Look for seat pattern (e.g., 15F, 32A)
+      const seatMatch = barcodeText.match(/(\d{1,2}[A-Z])/);
+      if (seatMatch) {
+        parsed.seat = seatMatch[1];
+      }
+      
+      // Look for date pattern (YYMMDD or MMDDYY)
+      const dateMatch = barcodeText.match(/(\d{6})/);
+      if (dateMatch) {
+        const dateStr = dateMatch[1];
+        // Try to parse as YYMMDD
+        if (dateStr.length === 6) {
+          const year = '20' + dateStr.substring(0, 2);
+          const month = dateStr.substring(2, 4);
+          const day = dateStr.substring(4, 6);
+          parsed.date = `${year}-${month}-${day}`;
+        }
+      }
+      
+      // Look for PNR (6 alphanumeric characters)
+      const pnrMatch = barcodeText.match(/([A-Z0-9]{6})/);
+      if (pnrMatch && pnrMatch[1].length === 6) {
+        parsed.pnr = pnrMatch[1];
+      }
+      
+      // If we can't parse structured data, try to extract any readable info
+      if (!parsed.passengerName && !parsed.flightNumber) {
+        // Try to find any text that looks like a name or flight
+        const textParts = barcodeText.split(/[\s\/]+/);
+        textParts.forEach((part: string) => {
+          if (part.length > 2 && part.length < 20 && /^[A-Z]+$/.test(part)) {
+            if (!parsed.passengerName) {
+              parsed.passengerName = part;
+            }
+          }
+        });
+      }
+      
+    } catch (error) {
+      console.error('Error parsing boarding pass:', error);
+    }
+    
+    return parsed;
+  };
+
   // Handle detected boarding pass barcode
   const handleBoardingPassDetected = (barcodeText: string) => {
     // Scanning is already stopped when barcode is detected
     
-    // Parse boarding pass data
-    // Boarding pass barcodes contain encoded passenger info
-    // Try to find passenger by matching barcode data
+    // Parse boarding pass data from barcode
+    const boardingPassData = parseBoardingPass(barcodeText);
+    const scanTime = new Date().toLocaleTimeString();
+    
+    // Try to find matching passenger in the list
     const passenger = findPassengerFromBarcode(barcodeText);
     
+    // Display the scanned boarding pass details
+    setScanResult({
+      success: true,
+      boardingPass: boardingPassData,
+      passenger: passenger || null,
+      flight: selectedFlight,
+      scanTime: scanTime,
+      barcodeText: barcodeText
+    });
+    
+    // If we found a matching passenger, update their status
     if (passenger && passenger.status === 'pending') {
-      const scanTime = new Date().toLocaleTimeString();
-      
-      setScanResult({
-        success: true,
-        passenger: passenger,
-        flight: selectedFlight,
-        scanTime: scanTime
-      });
-      
-      // Update passenger status
       setPassengers(prev => prev.map(p => 
         p.id === passenger.id 
           ? { ...p, status: 'verified', scanTime: scanTime }
           : p
       ));
-      
-      // Resume scanning after 2 seconds
-      setTimeout(() => {
-        setScanResult(null);
-        if (isScanning && streamRef.current) {
-          startBoardingPassScanning();
-        }
-      }, 2000);
-    } else if (passenger && passenger.status === 'verified') {
-      // Already verified
-      setScanResult({
-        success: false,
-        message: `${passenger.name} already verified`
-      });
-      
-      setTimeout(() => {
-        setScanResult(null);
-        if (isScanning && streamRef.current) {
-          startBoardingPassScanning();
-        }
-      }, 2000);
-    } else {
-      // Passenger not found for this flight
-      setScanResult({
-        success: false,
-        message: 'Boarding pass not found for this flight'
-      });
-      
-      setTimeout(() => {
-        setScanResult(null);
-        if (isScanning && streamRef.current) {
-          startBoardingPassScanning();
-        }
-      }, 2000);
     }
+    
+    // Resume scanning after 3 seconds (longer to read the details)
+    setTimeout(() => {
+      setScanResult(null);
+      if (isScanning && streamRef.current) {
+        startBoardingPassScanning();
+      }
+    }, 3000);
   };
 
   // Helper function to find passenger from barcode data
@@ -987,57 +1046,107 @@ export default function MobileScanner() {
                     </div>
                   )}
 
-                  {/* Success overlay */}
-                  {scanResult && scanResult.success && (
-                    <div className="absolute inset-0 bg-green-500 bg-opacity-90 flex items-center justify-center">
-                      <div className="text-center text-white">
-                        <div className="w-20 h-20 bg-white rounded-full flex items-center justify-center mb-4 mx-auto">
-                          <svg className="w-12 h-12 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  {/* Success overlay - Show boarding pass details */}
+                  {scanResult && scanResult.success && scanResult.boardingPass && (
+                    <div className="absolute inset-0 bg-white bg-opacity-95 flex items-center justify-center z-20 overflow-y-auto">
+                      <div className="w-full max-w-sm p-6 text-center">
+                        <div className="w-16 h-16 bg-green-500 rounded-full flex items-center justify-center mb-4 mx-auto">
+                          <svg className="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
                           </svg>
                         </div>
-                        <p className="text-xl font-bold">Verified!</p>
+                        <p className="text-2xl font-bold text-gray-900 mb-6">Boarding Pass Scanned</p>
+                        
+                        {/* Boarding Pass Details */}
+                        <div className="bg-gray-50 rounded-lg p-4 mb-4 text-left space-y-3">
+                          {scanResult.boardingPass.passengerName && (
+                            <div>
+                              <p className="text-xs text-gray-500 uppercase">Passenger Name</p>
+                              <p className="text-base font-semibold text-gray-900">{scanResult.boardingPass.passengerName}</p>
+                            </div>
+                          )}
+                          
+                          {scanResult.boardingPass.flightNumber && (
+                            <div>
+                              <p className="text-xs text-gray-500 uppercase">Flight Number</p>
+                              <p className="text-base font-semibold text-gray-900">{scanResult.boardingPass.flightNumber}</p>
+                            </div>
+                          )}
+                          
+                          {scanResult.boardingPass.seat && (
+                            <div>
+                              <p className="text-xs text-gray-500 uppercase">Seat</p>
+                              <p className="text-base font-semibold text-gray-900">{scanResult.boardingPass.seat}</p>
+                            </div>
+                          )}
+                          
+                          {scanResult.boardingPass.date && (
+                            <div>
+                              <p className="text-xs text-gray-500 uppercase">Date</p>
+                              <p className="text-base font-semibold text-gray-900">{scanResult.boardingPass.date}</p>
+                            </div>
+                          )}
+                          
+                          {scanResult.boardingPass.pnr && (
+                            <div>
+                              <p className="text-xs text-gray-500 uppercase">PNR</p>
+                              <p className="text-base font-semibold text-gray-900">{scanResult.boardingPass.pnr}</p>
+                            </div>
+                          )}
+                          
+                          {scanResult.boardingPass.airline && (
+                            <div>
+                              <p className="text-xs text-gray-500 uppercase">Airline</p>
+                              <p className="text-base font-semibold text-gray-900">{scanResult.boardingPass.airline}</p>
+                            </div>
+                          )}
+                          
+                          {/* Show raw barcode if no structured data found */}
+                          {!scanResult.boardingPass.passengerName && !scanResult.boardingPass.flightNumber && (
+                            <div>
+                              <p className="text-xs text-gray-500 uppercase mb-2">Barcode Data</p>
+                              <p className="text-xs font-mono text-gray-700 break-all bg-white p-2 rounded border">
+                                {scanResult.barcodeText || scanResult.boardingPass.raw}
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                        
+                        {/* Matched Passenger Info */}
                         {scanResult.passenger && (
-                          <p className="text-sm mt-2">{scanResult.passenger.name}</p>
+                          <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4">
+                            <p className="text-xs text-blue-600 uppercase mb-1">Matched Passenger</p>
+                            <p className="text-sm font-semibold text-blue-900">{scanResult.passenger.name}</p>
+                            <p className="text-xs text-blue-700">Seat {scanResult.passenger.seat}</p>
+                          </div>
                         )}
-                        {scanResult.message && (
-                          <p className="text-sm mt-2">{scanResult.message}</p>
-                        )}
+                        
+                        <p className="text-xs text-gray-500 mt-4">Scanning will resume automatically...</p>
                       </div>
                     </div>
                   )}
                 </div>
                 
-                {/* Floating Scan Button */}
-                {!scanResult && (
+                {/* Floating Camera Button - Only to start camera */}
+                {!isScanning && !scanResult && (
                   <button
                     onClick={() => {
-                      if (!isScanning) {
-                        startCamera();
-                      } else {
-                        handleScanSuccess();
-                      }
+                      startCamera();
                     }}
                     className="absolute -bottom-4 sm:-bottom-6 left-1/2 transform -translate-x-1/2 w-12 h-12 sm:w-14 sm:h-14 bg-blue-600 rounded-full flex items-center justify-center shadow-lg hover:bg-blue-700 active:bg-blue-800 transition-colors z-10 touch-manipulation"
+                    title="Start Camera"
                   >
-                    {isScanning ? (
-                      <svg className="w-5 h-5 sm:w-6 sm:h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 001.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
-                      </svg>
-                    ) : (
-                      <svg className="w-5 h-5 sm:w-6 sm:h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 001.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
-                      </svg>
-                    )}
+                    <svg className="w-5 h-5 sm:w-6 sm:h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 001.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
+                    </svg>
                   </button>
                 )}
               </div>
 
               {/* Instructions */}
               <div className="text-center text-sm text-gray-600 space-y-1 mb-6 mt-8">
-                <p>{isScanning ? 'Point camera at boarding pass barcode - scanning automatically' : 'Tap the scan button to open camera'}</p>
+                <p>{isScanning ? 'Point camera at boarding pass barcode - scanning automatically, no button press needed' : 'Tap the camera button to start scanning'}</p>
                 <p>Works offline - syncs automatically when online</p>
               </div>
 
