@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react';
 import Header from '../components/Header';
+import { BrowserMultiFormatReader, NotFoundException } from '@zxing/library';
 
 // Sample flights data
 const flights = [
@@ -326,6 +327,9 @@ export default function MobileScanner() {
   
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const codeReaderRef = useRef<BrowserMultiFormatReader | null>(null);
+  const scanningIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   // Get available flight numbers for the selected date
   const availableFlights = flights.filter(f => f.date === selectedDate);
@@ -421,6 +425,16 @@ export default function MobileScanner() {
         setIsScanning(true);
         setCameraPermission('granted');
         setShowPermissionPrompt(false);
+        
+        // Initialize barcode reader for boarding passes
+        if (!codeReaderRef.current) {
+          codeReaderRef.current = new BrowserMultiFormatReader();
+        }
+        
+        // Start scanning boarding pass barcodes automatically
+        setTimeout(() => {
+          startBoardingPassScanning();
+        }, 500); // Small delay to ensure video is ready
       }
     } catch (error: any) {
       console.error('Error accessing camera:', error);
@@ -462,6 +476,16 @@ export default function MobileScanner() {
             setIsScanning(true);
             setCameraPermission('granted');
             setShowPermissionPrompt(false);
+            
+            // Initialize barcode reader for boarding passes
+            if (!codeReaderRef.current) {
+              codeReaderRef.current = new BrowserMultiFormatReader();
+            }
+            
+            // Start scanning boarding pass barcodes automatically
+            setTimeout(() => {
+              startBoardingPassScanning();
+            }, 500); // Small delay to ensure video is ready
           }
           return;
         } catch (retryError) {
@@ -487,8 +511,185 @@ export default function MobileScanner() {
     await startCamera();
   };
 
+  // Start scanning boarding pass barcodes continuously
+  const startBoardingPassScanning = () => {
+    if (!videoRef.current || !codeReaderRef.current || !isScanning) {
+      return;
+    }
+    
+    // Create canvas for capturing frames
+    if (!canvasRef.current) {
+      canvasRef.current = document.createElement('canvas');
+    }
+    
+    const canvas = canvasRef.current;
+    const video = videoRef.current;
+    const codeReader = codeReaderRef.current;
+    
+    const scanFrame = async () => {
+      // Stop if camera is off, result is showing, or scanning stopped
+      if (!video || !canvas || !isScanning || scanResult || !streamRef.current) {
+        if (scanningIntervalRef.current) {
+          clearTimeout(scanningIntervalRef.current);
+          scanningIntervalRef.current = null;
+        }
+        return;
+      }
+      
+      try {
+        // Check if video has valid dimensions
+        if (video.videoWidth > 0 && video.videoHeight > 0) {
+          // Capture frame from video
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
+          const ctx = canvas.getContext('2d');
+          
+          if (ctx) {
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            
+            // Try to decode barcode from the frame
+            try {
+              const result = await codeReader.decodeFromCanvas(canvas);
+              
+              if (result && result.getText()) {
+                // Barcode detected!
+                handleBoardingPassDetected(result.getText());
+                return; // Stop scanning loop, will resume after handling
+              }
+            } catch (decodeError) {
+              // NotFoundException means no barcode found - this is normal
+              if (!(decodeError instanceof NotFoundException)) {
+                // Only log non-NotFoundException errors
+                // console.error('Decode error:', decodeError);
+              }
+            }
+          }
+        }
+      } catch (error) {
+        // Ignore errors and continue scanning
+        // console.error('Scanning error:', error);
+      }
+      
+      // Continue scanning if still active
+      if (isScanning && !scanResult && streamRef.current) {
+        scanningIntervalRef.current = setTimeout(scanFrame, 300); // Scan every 300ms
+      }
+    };
+    
+    // Start scanning loop
+    scanFrame();
+  };
+
+  // Handle detected boarding pass barcode
+  const handleBoardingPassDetected = (barcodeText: string) => {
+    // Stop scanning temporarily
+    if (scanningIntervalRef.current) {
+      clearTimeout(scanningIntervalRef.current);
+      scanningIntervalRef.current = null;
+    }
+    
+    // Parse boarding pass data
+    // Boarding pass barcodes contain encoded passenger info
+    // Try to find passenger by matching barcode data
+    const passenger = findPassengerFromBarcode(barcodeText);
+    
+    if (passenger && passenger.status === 'pending') {
+      const scanTime = new Date().toLocaleTimeString();
+      
+      setScanResult({
+        success: true,
+        passenger: passenger,
+        flight: selectedFlight,
+        scanTime: scanTime
+      });
+      
+      // Update passenger status
+      setPassengers(prev => prev.map(p => 
+        p.id === passenger.id 
+          ? { ...p, status: 'verified', scanTime: scanTime }
+          : p
+      ));
+      
+      // Resume scanning after 2 seconds
+      setTimeout(() => {
+        setScanResult(null);
+        if (isScanning && streamRef.current) {
+          startBoardingPassScanning();
+        }
+      }, 2000);
+    } else if (passenger && passenger.status === 'verified') {
+      // Already verified
+      setScanResult({
+        success: false,
+        message: `${passenger.name} already verified`
+      });
+      
+      setTimeout(() => {
+        setScanResult(null);
+        if (isScanning && streamRef.current) {
+          startBoardingPassScanning();
+        }
+      }, 2000);
+    } else {
+      // Passenger not found for this flight
+      setScanResult({
+        success: false,
+        message: 'Boarding pass not found for this flight'
+      });
+      
+      setTimeout(() => {
+        setScanResult(null);
+        if (isScanning && streamRef.current) {
+          startBoardingPassScanning();
+        }
+      }, 2000);
+    }
+  };
+
+  // Helper function to find passenger from barcode data
+  const findPassengerFromBarcode = (barcodeText: string): any => {
+    // Boarding pass barcodes contain encoded data
+    // For demo, we'll try simple matching
+    // In production, you'd parse the barcode according to airline format (IATA, etc.)
+    
+    // Try matching by passenger ID, seat, or name fragments
+    const passenger = passengers.find(p => {
+      // Try exact ID match
+      if (barcodeText.includes(p.id)) return true;
+      
+      // Try seat match (e.g., "32L" in barcode)
+      if (barcodeText.includes(p.seat)) return true;
+      
+      // Try name fragments (boarding passes often contain name parts)
+      const nameParts = p.name.split('/').map(part => part.trim().toUpperCase());
+      if (nameParts.some(part => part.length > 2 && barcodeText.toUpperCase().includes(part))) {
+        return true;
+      }
+      
+      // Try flight number match (if barcode contains flight info)
+      if (selectedFlight && barcodeText.includes(selectedFlight.replace(/\s/g, ''))) {
+        // If flight matches, try to match by other criteria
+        return barcodeText.includes(p.seat) || barcodeText.includes(p.id);
+      }
+      
+      return false;
+    });
+    
+    return passenger;
+  };
+
   // Stop camera
   const stopCamera = () => {
+    // Stop barcode scanning
+    if (scanningIntervalRef.current) {
+      clearTimeout(scanningIntervalRef.current);
+      scanningIntervalRef.current = null;
+    }
+    
+    if (codeReaderRef.current) {
+      codeReaderRef.current.reset();
+    }
+    
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(track => track.stop());
       streamRef.current = null;
@@ -780,33 +981,35 @@ export default function MobileScanner() {
               {/* Camera Scanner Frame */}
               <div className="relative mb-4 sm:mb-6">
                 <div className="bg-gray-900 rounded-lg overflow-hidden aspect-square flex items-center justify-center relative min-h-[250px] sm:min-h-[300px] md:min-h-[400px]">
-                  {isScanning ? (
+                  {/* Video element - always render */}
+                  <video
+                    ref={videoRef}
+                    autoPlay
+                    playsInline
+                    muted
+                    className={`w-full h-full object-cover absolute inset-0 z-0 ${isScanning ? 'block' : 'hidden'}`}
+                    onLoadedMetadata={(e) => {
+                      // Ensure video plays when metadata is loaded
+                      const video = e.currentTarget;
+                      if (video.paused) {
+                        video.play().catch(console.error);
+                      }
+                    }}
+                  />
+                  
+                  {/* Corner markers - white brackets */}
+                  {isScanning && (
                     <>
-                      <video
-                        ref={videoRef}
-                        autoPlay
-                        playsInline
-                        muted
-                        className="w-full h-full object-cover"
-                      />
-                      {/* Corner markers - white brackets */}
-                      <div className="absolute top-2 left-2 sm:top-4 sm:left-4 w-8 h-8 sm:w-12 sm:h-12 border-t-2 sm:border-t-4 border-l-2 sm:border-l-4 border-white rounded-tl-lg"></div>
-                      <div className="absolute top-2 right-2 sm:top-4 sm:right-4 w-8 h-8 sm:w-12 sm:h-12 border-t-2 sm:border-t-4 border-r-2 sm:border-r-4 border-white rounded-tr-lg"></div>
-                      <div className="absolute bottom-2 left-2 sm:bottom-4 sm:left-4 w-8 h-8 sm:w-12 sm:h-12 border-b-2 sm:border-b-4 border-l-2 sm:border-l-4 border-white rounded-bl-lg"></div>
-                      <div className="absolute bottom-2 right-2 sm:bottom-4 sm:right-4 w-8 h-8 sm:w-12 sm:h-12 border-b-2 sm:border-b-4 border-r-2 sm:border-r-4 border-white rounded-br-lg"></div>
-                      
-                      {/* Scanning overlay - hidden when scanning */}
-                      {!scanResult && (
-                        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                          <div className="text-white text-center opacity-0">
-                            <p className="text-lg font-semibold mb-2">Scanning...</p>
-                            <p className="text-sm opacity-75">Position QR code within frame</p>
-                          </div>
-                        </div>
-                      )}
+                      <div className="absolute top-2 left-2 sm:top-4 sm:left-4 w-8 h-8 sm:w-12 sm:h-12 border-t-2 sm:border-t-4 border-l-2 sm:border-l-4 border-white rounded-tl-lg z-10"></div>
+                      <div className="absolute top-2 right-2 sm:top-4 sm:right-4 w-8 h-8 sm:w-12 sm:h-12 border-t-2 sm:border-t-4 border-r-2 sm:border-r-4 border-white rounded-tr-lg z-10"></div>
+                      <div className="absolute bottom-2 left-2 sm:bottom-4 sm:left-4 w-8 h-8 sm:w-12 sm:h-12 border-b-2 sm:border-b-4 border-l-2 sm:border-l-4 border-white rounded-bl-lg z-10"></div>
+                      <div className="absolute bottom-2 right-2 sm:bottom-4 sm:right-4 w-8 h-8 sm:w-12 sm:h-12 border-b-2 sm:border-b-4 border-r-2 sm:border-r-4 border-white rounded-br-lg z-10"></div>
                     </>
-                  ) : (
-                    <div className="text-white text-center p-8">
+                  )}
+                  
+                  {/* Placeholder when camera is off */}
+                  {!isScanning && (
+                    <div className="text-white text-center p-8 z-10">
                       <svg className="w-16 h-16 mx-auto mb-4 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 001.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
@@ -865,7 +1068,7 @@ export default function MobileScanner() {
 
               {/* Instructions */}
               <div className="text-center text-sm text-gray-600 space-y-1 mb-6 mt-8">
-                <p>Tap the scan button to {isScanning ? 'verify boarding pass' : 'open camera'}</p>
+                <p>{isScanning ? 'Point camera at boarding pass barcode - scanning automatically' : 'Tap the scan button to open camera'}</p>
                 <p>Works offline - syncs automatically when online</p>
               </div>
 
