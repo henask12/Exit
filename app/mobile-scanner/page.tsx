@@ -408,6 +408,16 @@ export default function MobileScanner() {
         videoRef.current.srcObject = stream;
         videoRef.current.setAttribute('playsinline', 'true');
         videoRef.current.setAttribute('webkit-playsinline', 'true');
+        videoRef.current.muted = true; // Required for autoplay in many browsers
+        
+        // Ensure video plays
+        try {
+          await videoRef.current.play();
+        } catch (playError) {
+          console.error('Error playing video:', playError);
+          // Video should still work with autoplay attribute
+        }
+        
         setIsScanning(true);
         setCameraPermission('granted');
         setShowPermissionPrompt(false);
@@ -440,6 +450,15 @@ export default function MobileScanner() {
             videoRef.current.srcObject = stream;
             videoRef.current.setAttribute('playsinline', 'true');
             videoRef.current.setAttribute('webkit-playsinline', 'true');
+            videoRef.current.muted = true; // Required for autoplay in many browsers
+            
+            // Ensure video plays
+            try {
+              await videoRef.current.play();
+            } catch (playError) {
+              console.error('Error playing video:', playError);
+            }
+            
             setIsScanning(true);
             setCameraPermission('granted');
             setShowPermissionPrompt(false);
@@ -527,6 +546,18 @@ export default function MobileScanner() {
       }, 2000);
     }
   };
+
+  // Ensure video plays when stream is set
+  useEffect(() => {
+    if (videoRef.current && streamRef.current && isScanning) {
+      const video = videoRef.current;
+      if (video.paused) {
+        video.play().catch((error) => {
+          console.error('Error playing video in useEffect:', error);
+        });
+      }
+    }
+  }, [isScanning]);
 
   // Start camera automatically when camera view opens, and cleanup on exit
   useEffect(() => {
@@ -755,6 +786,7 @@ export default function MobileScanner() {
                         ref={videoRef}
                         autoPlay
                         playsInline
+                        muted
                         className="w-full h-full object-cover"
                       />
                       {/* Corner markers - white brackets */}
