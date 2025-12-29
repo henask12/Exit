@@ -330,6 +330,7 @@ export default function MobileScanner() {
   const streamRef = useRef<MediaStream | null>(null);
   const codeReaderRef = useRef<BrowserMultiFormatReader | null>(null);
   const scanningActiveRef = useRef<boolean>(false);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
 
   // Add notification
   const addNotification = (type: 'success' | 'error' | 'warning' | 'info', message: string, details?: string) => {
@@ -568,8 +569,16 @@ export default function MobileScanner() {
     }
     
     // Double-check we're not already scanning
+    // If stuck for more than 10 seconds, reset the flag
     if (scanningActiveRef.current) {
       console.log('Scanning already active, skipping...');
+      // Reset if stuck (fallback mechanism)
+      setTimeout(() => {
+        if (scanningActiveRef.current && !streamRef.current) {
+          console.log('Resetting stuck scanning flag');
+          scanningActiveRef.current = false;
+        }
+      }, 10000);
       return;
     }
     
@@ -871,6 +880,94 @@ export default function MobileScanner() {
     });
     
     return passenger;
+  };
+
+  // Capture and scan from image (fallback method)
+  const captureAndScan = async () => {
+    const video = videoRef.current;
+    const codeReader = codeReaderRef.current;
+    
+    if (!video || !codeReader || !streamRef.current) {
+      addNotification('error', 'Camera not ready', 'Please ensure camera is started before capturing');
+      return;
+    }
+    
+    // Check video is ready
+    if (video.readyState < 2 || video.videoWidth === 0 || video.videoHeight === 0) {
+      addNotification('error', 'Video not ready', 'Please wait for camera to be ready');
+      return;
+    }
+    
+    // Temporarily stop continuous scanning while capturing
+    const wasScanning = scanningActiveRef.current;
+    scanningActiveRef.current = false;
+    
+    try {
+      // Create canvas to capture current frame
+      if (!canvasRef.current) {
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        canvasRef.current = canvas;
+      }
+      
+      const canvas = canvasRef.current;
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext('2d');
+      
+      if (!ctx) {
+        addNotification('error', 'Capture failed', 'Could not create canvas context');
+        return;
+      }
+      
+      // Draw current video frame to canvas
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      
+      addNotification('info', 'Capturing...', 'Analyzing captured image for barcode...');
+      
+      // Convert canvas to image and decode
+      const imageData = canvas.toDataURL('image/png');
+      const img = new Image();
+      img.src = imageData;
+      
+      await new Promise((resolve, reject) => {
+        img.onload = resolve;
+        img.onerror = reject;
+      });
+      
+      // Try to decode from image
+      const result = await codeReader.decodeFromImageElement(img);
+      
+      if (result && result.getText()) {
+        // Barcode detected!
+        console.log('Barcode detected from capture:', result.getText());
+        handleBoardingPassDetected(result.getText());
+        // Don't resume scanning - handleBoardingPassDetected will handle it
+      } else {
+        addNotification('warning', 'No barcode found', 'Could not detect a barcode in the captured image. Please try again.');
+        // Resume continuous scanning if it was active
+        if (wasScanning && streamRef.current) {
+          setTimeout(() => {
+            startBoardingPassScanning();
+          }, 500);
+        }
+      }
+    } catch (error) {
+      if (error instanceof NotFoundException) {
+        addNotification('warning', 'No barcode found', 'Could not detect a barcode in the captured image. Please ensure the boarding pass is clearly visible and try again.');
+      } else {
+        console.error('Error capturing and scanning:', error);
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        addNotification('error', 'Scan failed', `Error while scanning captured image: ${errorMessage}`);
+      }
+      // Resume continuous scanning if it was active
+      if (wasScanning && streamRef.current) {
+        setTimeout(() => {
+          startBoardingPassScanning();
+        }, 500);
+      }
+    }
   };
 
   // Stop camera
@@ -1414,11 +1511,28 @@ export default function MobileScanner() {
                     </svg>
                   </button>
                 )}
+                
+                {/* Capture & Scan Button - Fallback when camera is active */}
+                {isScanning && !scanResult && (
+                  <button
+                    onClick={captureAndScan}
+                    className="absolute -bottom-4 sm:-bottom-6 left-1/2 transform -translate-x-1/2 w-16 h-16 sm:w-20 sm:h-20 bg-green-600 rounded-full flex items-center justify-center shadow-lg hover:bg-green-700 active:bg-green-800 transition-colors z-10 touch-manipulation border-4 border-white"
+                    title="Capture & Scan"
+                  >
+                    <svg className="w-8 h-8 sm:w-10 sm:h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 001.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
+                    </svg>
+                  </button>
+                )}
               </div>
 
+              {/* Hidden canvas for image capture */}
+              <canvas ref={canvasRef} className="hidden" />
+              
               {/* Instructions */}
               <div className="text-center text-sm text-gray-600 space-y-1 mb-6 mt-8">
-                <p>{isScanning ? 'Point camera at boarding pass barcode - scanning automatically, no button press needed' : 'Tap the camera button to start scanning'}</p>
+                <p>{isScanning ? 'Point camera at boarding pass barcode - scanning automatically, or tap the green button to capture & scan' : 'Tap the camera button to start scanning'}</p>
                 <p>Works offline - syncs automatically when online</p>
               </div>
 
