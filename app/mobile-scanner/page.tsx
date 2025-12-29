@@ -595,46 +595,74 @@ export default function MobileScanner() {
     }
     
     // Double-check we're not already scanning
-    // If stuck for more than 10 seconds, reset the flag
+    // If stuck, reset the flag immediately if video isn't ready
     if (scanningActiveRef.current) {
-      console.log('Scanning already active, skipping...');
-      // Reset if stuck (fallback mechanism)
+      console.log('Scanning already active, checking if stuck...');
+      // Check if video is actually ready - if not, reset immediately
+      if (!video || video.readyState < 2 || video.videoWidth === 0 || video.videoHeight === 0) {
+        console.log('Resetting stuck scanning flag - video not ready');
+        scanningActiveRef.current = false;
+        // Wait a moment and retry
+        setTimeout(() => {
+          if (streamRef.current && videoRef.current && codeReaderRef.current) {
+            startBoardingPassScanning();
+          }
+        }, 500);
+        return;
+      }
+      // If video is ready but scanning is stuck, wait a bit then reset
       setTimeout(() => {
-        if (scanningActiveRef.current && !streamRef.current) {
-          console.log('Resetting stuck scanning flag');
+        if (scanningActiveRef.current && (!streamRef.current || !videoRef.current)) {
+          console.log('Resetting stuck scanning flag - resources missing');
           scanningActiveRef.current = false;
         }
-      }, 10000);
+      }, 3000);
       return;
     }
     
     const video = videoRef.current;
     const codeReader = codeReaderRef.current;
     
-    // Wait for video to be ready
-    if (video.readyState < 2) {
+    // Wait for video to be ready with better retry logic
+    let retries = 0;
+    const maxRetries = 10;
+    
+    while ((video.readyState < 2 || video.videoWidth === 0 || video.videoHeight === 0) && retries < maxRetries) {
+      console.log(`Waiting for video to be ready... (attempt ${retries + 1}/${maxRetries})`, {
+        readyState: video.readyState,
+        width: video.videoWidth,
+        height: video.videoHeight
+      });
+      
       // Wait for video metadata to load
       await new Promise((resolve) => {
-        if (video.readyState >= 2) {
+        if (video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0) {
           resolve(undefined);
         } else {
-          video.addEventListener('loadedmetadata', () => resolve(undefined), { once: true });
-          // Timeout after 2 seconds
-          setTimeout(() => resolve(undefined), 2000);
+          const timeout = setTimeout(() => resolve(undefined), 1000);
+          video.addEventListener('loadedmetadata', () => {
+            clearTimeout(timeout);
+            resolve(undefined);
+          }, { once: true });
+          video.addEventListener('loadeddata', () => {
+            clearTimeout(timeout);
+            resolve(undefined);
+          }, { once: true });
         }
       });
+      
+      retries++;
+      
+      // If still not ready, wait a bit before retrying
+      if (video.readyState < 2 || video.videoWidth === 0 || video.videoHeight === 0) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
     }
     
-    // Check video dimensions
     if (video.videoWidth === 0 || video.videoHeight === 0) {
-      console.log('Video not ready, waiting...');
-      // Wait a bit more for video dimensions
-      await new Promise(resolve => setTimeout(resolve, 500));
-    }
-    
-    if (video.videoWidth === 0 || video.videoHeight === 0) {
-      console.error('Video dimensions not available');
-      addNotification('error', 'Camera not ready', 'Video dimensions are not available. Please wait a moment and try again.');
+      console.error('Video dimensions not available after retries');
+      addNotification('error', 'Camera not ready', 'Video dimensions are not available. Please ensure camera is working and try again.');
+      scanningActiveRef.current = false;
       return;
     }
     
@@ -918,9 +946,19 @@ export default function MobileScanner() {
       return;
     }
     
+    // Wait for video to be ready with retries
+    let retries = 0;
+    const maxRetries = 5;
+    
+    while ((video.readyState < 2 || video.videoWidth === 0 || video.videoHeight === 0) && retries < maxRetries) {
+      console.log(`Waiting for video before capture... (attempt ${retries + 1}/${maxRetries})`);
+      await new Promise(resolve => setTimeout(resolve, 500));
+      retries++;
+    }
+    
     // Check video is ready
     if (video.readyState < 2 || video.videoWidth === 0 || video.videoHeight === 0) {
-      addNotification('error', 'Video not ready', 'Please wait for camera to be ready');
+      addNotification('error', 'Video not ready', 'Please wait for camera to be ready. Try again in a moment.');
       return;
     }
     
@@ -1557,10 +1595,31 @@ export default function MobileScanner() {
               <canvas ref={canvasRef} className="hidden" />
               
               {/* Instructions */}
-              <div className="text-center text-sm text-gray-600 space-y-1 mb-6 mt-8">
+              <div className="text-center text-sm text-gray-600 space-y-1 mb-4 mt-8">
                 <p>{isScanning ? 'Point camera at boarding pass barcode - scanning automatically, or tap the green button to capture & scan' : 'Tap the camera button to start scanning'}</p>
                 <p>Works offline - syncs automatically when online</p>
               </div>
+              
+              {/* Reset Scanning Button - appears if scanning is stuck */}
+              {isScanning && scanningActiveRef.current && (
+                <div className="text-center mb-4">
+                  <button
+                    onClick={() => {
+                      console.log('Manual reset of scanning');
+                      scanningActiveRef.current = false;
+                      addNotification('info', 'Scanning reset', 'Resetting scanner. Please wait...');
+                      setTimeout(() => {
+                        if (streamRef.current && videoRef.current && codeReaderRef.current) {
+                          startBoardingPassScanning();
+                        }
+                      }, 1000);
+                    }}
+                    className="text-xs text-blue-600 hover:text-blue-700 underline"
+                  >
+                    Reset Scanner
+                  </button>
+                </div>
+              )}
 
               {/* Recent Scans */}
               <div className="border-t border-gray-200 pt-4">
