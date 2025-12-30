@@ -6,324 +6,13 @@ import { BrowserMultiFormatReader } from '@zxing/browser';
 import { NotFoundException, DecodeHintType, BarcodeFormat } from '@zxing/library';
 import { createWorker } from 'tesseract.js';
 
-// Sample flights data
-const flights = [
-  {
-    flight: 'ET 302',
-    date: '2024-01-15',
-    aircraft: 'B787-9',
-    route: { origin: 'ADD', intermediate: 'DUB', destination: 'JFK' },
-    gate: 'Gate A12',
-    depTime: '10:30',
-    arrTime: '14:45',
-    passengers: { total: 287, disembarking: 42, continuing: 245 },
-    verification: { verified: 40, total: 42 },
-    status: 'BOARDING',
-    statusColor: 'bg-blue-100 text-blue-700'
-  },
-  {
-    flight: 'ET 608',
-    date: '2024-01-15',
-    aircraft: 'B777-300ER',
-    route: { origin: 'ADD', intermediate: 'FCO', destination: 'IAD' },
-    gate: 'Gate B8',
-    depTime: '11:15',
-    arrTime: '15:30',
-    passengers: { total: 312, disembarking: 67, continuing: 245 },
-    verification: { verified: 67, total: 67 },
-    status: 'IN FLIGHT',
-    statusColor: 'bg-purple-100 text-purple-700'
-  },
-  {
-    flight: 'ET 500',
-    date: '2024-01-15',
-    aircraft: 'B787-8',
-    route: { origin: 'ADD', intermediate: 'CAI', destination: 'BRU' },
-    gate: 'Gate C15',
-    depTime: '09:45',
-    arrTime: '13:20',
-    passengers: { total: 198, disembarking: 23, continuing: 175 },
-    verification: { verified: 21, total: 23 },
-    status: 'ARRIVED',
-    statusColor: 'bg-gray-100 text-gray-700'
-  },
-  {
-    flight: 'ET 701',
-    date: '2024-01-15',
-    aircraft: 'B787-9',
-    route: { origin: 'ADD', intermediate: 'LHR', destination: 'LAX' },
-    gate: 'Gate A5',
-    depTime: '08:00',
-    arrTime: '18:30',
-    passengers: { total: 298, disembarking: 55, continuing: 243 },
-    verification: { verified: 32, total: 55 },
-    status: 'BOARDING',
-    statusColor: 'bg-blue-100 text-blue-700'
-  },
-  {
-    flight: 'ET 205',
-    date: '2024-01-15',
-    aircraft: 'B777-200LR',
-    route: { origin: 'ADD', intermediate: 'DXB', destination: 'SYD' },
-    gate: 'Gate B12',
-    depTime: '13:20',
-    arrTime: '06:45+1',
-    passengers: { total: 342, disembarking: 78, continuing: 264 },
-    verification: { verified: 45, total: 78 },
-    status: 'BOARDING',
-    statusColor: 'bg-blue-100 text-blue-700'
-  },
-  {
-    flight: 'ET 404',
-    date: '2024-01-15',
-    aircraft: 'B787-8',
-    route: { origin: 'ADD', intermediate: 'IST', destination: 'CDG' },
-    gate: 'Gate C8',
-    depTime: '16:45',
-    arrTime: '22:10',
-    passengers: { total: 234, disembarking: 38, continuing: 196 },
-    verification: { verified: 38, total: 38 },
-    status: 'IN FLIGHT',
-    statusColor: 'bg-purple-100 text-purple-700'
-  },
-  {
-    flight: 'ET 850',
-    date: '2024-01-16',
-    aircraft: 'B787-9',
-    route: { origin: 'ADD', intermediate: 'DUB', destination: 'JFK' },
-    gate: 'Gate A12',
-    depTime: '10:30',
-    arrTime: '14:45',
-    passengers: { total: 287, disembarking: 42, continuing: 245 },
-    verification: { verified: 0, total: 42 },
-    status: 'SCHEDULED',
-    statusColor: 'bg-gray-100 text-gray-700'
-  },
-  {
-    flight: 'ET 612',
-    date: '2024-01-16',
-    aircraft: 'B777-300ER',
-    route: { origin: 'ADD', intermediate: 'FCO', destination: 'IAD' },
-    gate: 'Gate B8',
-    depTime: '11:15',
-    arrTime: '15:30',
-    passengers: { total: 312, disembarking: 67, continuing: 245 },
-    verification: { verified: 0, total: 67 },
-    status: 'SCHEDULED',
-    statusColor: 'bg-gray-100 text-gray-700'
-  },
-  {
-    flight: 'ET 320',
-    date: '2024-01-16',
-    aircraft: 'B787-8',
-    route: { origin: 'ADD', intermediate: 'CAI', destination: 'BRU' },
-    gate: 'Gate C15',
-    depTime: '09:45',
-    arrTime: '13:20',
-    passengers: { total: 198, disembarking: 23, continuing: 175 },
-    verification: { verified: 0, total: 23 },
-    status: 'SCHEDULED',
-    statusColor: 'bg-gray-100 text-gray-700'
-  },
-  {
-    flight: 'ET 150',
-    date: '2024-01-16',
-    aircraft: 'B787-9',
-    route: { origin: 'ADD', intermediate: 'LHR', destination: 'LAX' },
-    gate: 'Gate A5',
-    depTime: '08:00',
-    arrTime: '18:30',
-    passengers: { total: 298, disembarking: 55, continuing: 243 },
-    verification: { verified: 0, total: 55 },
-    status: 'SCHEDULED',
-    statusColor: 'bg-gray-100 text-gray-700'
-  },
-  {
-    flight: 'ET 888',
-    date: '2024-01-17',
-    aircraft: 'B777-300ER',
-    route: { origin: 'ADD', intermediate: 'DXB', destination: 'SYD' },
-    gate: 'Gate B12',
-    depTime: '13:20',
-    arrTime: '06:45+1',
-    passengers: { total: 342, disembarking: 78, continuing: 264 },
-    verification: { verified: 0, total: 78 },
-    status: 'SCHEDULED',
-    statusColor: 'bg-gray-100 text-gray-700'
-  },
-  {
-    flight: 'ET 245',
-    date: '2024-01-17',
-    aircraft: 'B787-8',
-    route: { origin: 'ADD', intermediate: 'IST', destination: 'CDG' },
-    gate: 'Gate C8',
-    depTime: '16:45',
-    arrTime: '22:10',
-    passengers: { total: 234, disembarking: 38, continuing: 196 },
-    verification: { verified: 0, total: 38 },
-    status: 'SCHEDULED',
-    statusColor: 'bg-gray-100 text-gray-700'
-  },
-  {
-    flight: 'ET 302',
-    date: '2025-12-29',
-    aircraft: 'B787-9',
-    route: { origin: 'ADD', intermediate: 'DUB', destination: 'JFK' },
-    gate: 'Gate A12',
-    depTime: '10:30',
-    arrTime: '14:45',
-    passengers: { total: 287, disembarking: 42, continuing: 245 },
-    verification: { verified: 0, total: 42 },
-    status: 'SCHEDULED',
-    statusColor: 'bg-gray-100 text-gray-700'
-  },
-  {
-    flight: 'ET 608',
-    date: '2025-12-29',
-    aircraft: 'B777-300ER',
-    route: { origin: 'ADD', intermediate: 'FCO', destination: 'IAD' },
-    gate: 'Gate B8',
-    depTime: '11:15',
-    arrTime: '15:30',
-    passengers: { total: 312, disembarking: 67, continuing: 245 },
-    verification: { verified: 0, total: 67 },
-    status: 'SCHEDULED',
-    statusColor: 'bg-gray-100 text-gray-700'
-  },
-  {
-    flight: 'ET 500',
-    date: '2025-12-29',
-    aircraft: 'B787-8',
-    route: { origin: 'ADD', intermediate: 'CAI', destination: 'BRU' },
-    gate: 'Gate C15',
-    depTime: '09:45',
-    arrTime: '13:20',
-    passengers: { total: 198, disembarking: 23, continuing: 175 },
-    verification: { verified: 0, total: 23 },
-    status: 'SCHEDULED',
-    statusColor: 'bg-gray-100 text-gray-700'
-  },
-  {
-    flight: 'ET 701',
-    date: '2025-12-29',
-    aircraft: 'B787-9',
-    route: { origin: 'ADD', intermediate: 'LHR', destination: 'LAX' },
-    gate: 'Gate A5',
-    depTime: '08:00',
-    arrTime: '18:30',
-    passengers: { total: 298, disembarking: 55, continuing: 243 },
-    verification: { verified: 0, total: 55 },
-    status: 'SCHEDULED',
-    statusColor: 'bg-gray-100 text-gray-700'
-  },
-  {
-    flight: 'ET 205',
-    date: '2025-12-29',
-    aircraft: 'B777-200LR',
-    route: { origin: 'ADD', intermediate: 'DXB', destination: 'SYD' },
-    gate: 'Gate B12',
-    depTime: '13:20',
-    arrTime: '06:45+1',
-    passengers: { total: 342, disembarking: 78, continuing: 264 },
-    verification: { verified: 0, total: 78 },
-    status: 'SCHEDULED',
-    statusColor: 'bg-gray-100 text-gray-700'
-  },
-  {
-    flight: 'ET 404',
-    date: '2025-12-29',
-    aircraft: 'B787-8',
-    route: { origin: 'ADD', intermediate: 'IST', destination: 'CDG' },
-    gate: 'Gate C8',
-    depTime: '16:45',
-    arrTime: '22:10',
-    passengers: { total: 234, disembarking: 38, continuing: 196 },
-    verification: { verified: 0, total: 38 },
-    status: 'SCHEDULED',
-    statusColor: 'bg-gray-100 text-gray-700'
-  }
-];
-
-// Sample passengers data for verification
-const getPassengersForFlight = (flightNumber: string, date: string) => {
-  // Mock passenger data - in real app, this would come from API
-  const passengers = {
-    'ET 302': [
-      { id: 1, name: 'ANDERSON/JAMES MR', seat: '23B', status: 'verified', scanTime: '14:32:15' },
-      { id: 2, name: 'SMITH/JOHN MR', seat: '12A', status: 'pending', scanTime: null },
-      { id: 3, name: 'WILLIAMS/MARY MS', seat: '15C', status: 'pending', scanTime: null },
-      { id: 4, name: 'BROWN/ROBERT MR', seat: '8D', status: 'verified', scanTime: '14:28:42' },
-      { id: 5, name: 'DAVIS/LISA MS', seat: '20F', status: 'pending', scanTime: null }
-    ],
-    'ET 608': [
-      { id: 1, name: 'JOHNSON/MICHAEL MR', seat: '10A', status: 'verified', scanTime: '15:10:22' },
-      { id: 2, name: 'GARCIA/MARIA MS', seat: '18B', status: 'verified', scanTime: '15:12:05' },
-      { id: 3, name: 'MARTINEZ/CARLOS MR', seat: '5C', status: 'pending', scanTime: null }
-    ],
-    'ET 500': [
-      { id: 1, name: 'TAYLOR/SARAH MS', seat: '14A', status: 'verified', scanTime: '13:45:30' },
-      { id: 2, name: 'THOMAS/DAVID MR', seat: '7B', status: 'pending', scanTime: null }
-    ],
-    'ET 701': [
-      { id: 1, name: 'WILSON/CHRIS MR', seat: '11A', status: 'verified', scanTime: '08:15:30' },
-      { id: 2, name: 'MOORE/AMANDA MS', seat: '22B', status: 'verified', scanTime: '08:18:45' },
-      { id: 3, name: 'JACKSON/STEVEN MR', seat: '9C', status: 'pending', scanTime: null },
-      { id: 4, name: 'WHITE/EMILY MS', seat: '16D', status: 'pending', scanTime: null },
-      { id: 5, name: 'HARRIS/MARK MR', seat: '25E', status: 'pending', scanTime: null }
-    ],
-    'ET 205': [
-      { id: 1, name: 'MARTIN/JENNIFER MS', seat: '6A', status: 'verified', scanTime: '13:25:10' },
-      { id: 2, name: 'THOMPSON/KEVIN MR', seat: '14B', status: 'verified', scanTime: '13:27:22' },
-      { id: 3, name: 'GARCIA/ANNA MS', seat: '19C', status: 'pending', scanTime: null },
-      { id: 4, name: 'MARTINEZ/PAUL MR', seat: '3D', status: 'pending', scanTime: null }
-    ],
-    'ET 404': [
-      { id: 1, name: 'ROBINSON/LINDA MS', seat: '12A', status: 'verified', scanTime: '16:50:15' },
-      { id: 2, name: 'CLARK/DANIEL MR', seat: '21B', status: 'verified', scanTime: '16:52:30' },
-      { id: 3, name: 'LEWIS/NANCY MS', seat: '8C', status: 'verified', scanTime: '16:55:45' }
-    ],
-    'ET 850': [
-      { id: 1, name: 'WALKER/GEORGE MR', seat: '15A', status: 'pending', scanTime: null },
-      { id: 2, name: 'HALL/SUSAN MS', seat: '24B', status: 'pending', scanTime: null },
-      { id: 3, name: 'ALLEN/RICHARD MR', seat: '7C', status: 'pending', scanTime: null },
-      { id: 4, name: 'YOUNG/KAREN MS', seat: '18D', status: 'pending', scanTime: null }
-    ],
-    'ET 612': [
-      { id: 1, name: 'KING/JOSEPH MR', seat: '10A', status: 'pending', scanTime: null },
-      { id: 2, name: 'WRIGHT/BETTY MS', seat: '20B', status: 'pending', scanTime: null },
-      { id: 3, name: 'LOPEZ/FRANK MR', seat: '5C', status: 'pending', scanTime: null }
-    ],
-    'ET 320': [
-      { id: 1, name: 'HILL/HENRY MR', seat: '13A', status: 'pending', scanTime: null },
-      { id: 2, name: 'SCOTT/DOROTHY MS', seat: '17B', status: 'pending', scanTime: null }
-    ],
-    'ET 150': [
-      { id: 1, name: 'GREEN/RAYMOND MR', seat: '11A', status: 'pending', scanTime: null },
-      { id: 2, name: 'ADAMS/HELEN MS', seat: '23B', status: 'pending', scanTime: null },
-      { id: 3, name: 'BAKER/LAWRENCE MR', seat: '9C', status: 'pending', scanTime: null }
-    ],
-    'ET 888': [
-      { id: 1, name: 'NELSON/ALICE MS', seat: '14A', status: 'pending', scanTime: null },
-      { id: 2, name: 'CARTER/CHARLES MR', seat: '22B', status: 'pending', scanTime: null },
-      { id: 3, name: 'MITCHELL/RUTH MS', seat: '6C', status: 'pending', scanTime: null }
-    ],
-    'ET 245': [
-      { id: 1, name: 'PEREZ/JAMES MR', seat: '16A', status: 'pending', scanTime: null },
-      { id: 2, name: 'ROBERTS/VIOLET MS', seat: '19B', status: 'pending', scanTime: null }
-    ]
-  };
-  return passengers[flightNumber as keyof typeof passengers] || [];
-};
-
-type ViewMode = 'flight-selection' | 'camera';
+type ViewMode = 'camera';
 
 export default function MobileScanner() {
-  const [selectedFlight, setSelectedFlight] = useState<string>('');
-  const [selectedDate, setSelectedDate] = useState<string>(new Date().toISOString().split('T')[0]);
-  const [currentView, setCurrentView] = useState<ViewMode>('flight-selection');
-  const [passengers, setPassengers] = useState<any[]>([]);
+  const [currentView, setCurrentView] = useState<ViewMode>('camera');
   const [isScanning, setIsScanning] = useState(false);
   const [scanResult, setScanResult] = useState<any>(null);
+  const [recentScans, setRecentScans] = useState<Array<any>>([]);
   const [cameraPermission, setCameraPermission] = useState<'prompt' | 'granted' | 'denied' | 'checking'>('checking');
   const [showPermissionPrompt, setShowPermissionPrompt] = useState(false);
   const [notifications, setNotifications] = useState<Array<{id: string, type: 'success' | 'error' | 'warning' | 'info', message: string, details?: string}>>([]);
@@ -405,9 +94,6 @@ export default function MobileScanner() {
     setNotifications(prev => prev.filter(n => n.id !== id));
   };
 
-  // Get available flight numbers for the selected date
-  const availableFlights = flights.filter(f => f.date === selectedDate);
-
   // Check camera permission status
   const checkCameraPermission = async () => {
     try {
@@ -449,14 +135,21 @@ export default function MobileScanner() {
     checkCameraPermission();
   }, []);
 
-  // Handle flight selection - go directly to camera
-  const handleFlightSelect = () => {
-    if (selectedFlight) {
-      const flightPassengers = getPassengersForFlight(selectedFlight, selectedDate);
-      setPassengers(flightPassengers);
-      setCurrentView('camera');
+  // Auto-start camera on mount
+  useEffect(() => {
+    if (!isScanning && !streamRef.current) {
+      const permission = cameraPermission;
+      if (permission === 'prompt' || permission === 'granted' || permission === 'checking') {
+        setTimeout(() => {
+          startCamera().catch(() => {
+            if (permission === 'prompt') {
+              setShowPermissionPrompt(true);
+            }
+          });
+        }, 500);
+      }
     }
-  };
+  }, [cameraPermission]);
 
   // Start camera - ZXing's decodeFromVideoDevice manages the camera stream
   const startCamera = async () => {
@@ -833,65 +526,27 @@ export default function MobileScanner() {
     // Parse boarding pass data - use OCR data if provided, otherwise parse from barcode
     const boardingPassData = ocrData || parseBoardingPass(barcodeText);
     const scanTime = new Date().toLocaleTimeString();
+    const scanDate = new Date().toLocaleDateString();
     
-    // Check for parsing errors
-    if (boardingPassData.parseErrors && boardingPassData.parseErrors.length > 0) {
-      const errorDetails = boardingPassData.parseErrors.join('; ');
-      addNotification(
-        'error', 
-        'Failed to parse boarding pass data', 
-        `Barcode was detected but parsing failed. Reasons: ${errorDetails}. Raw barcode: ${barcodeText}`
-      );
-    } else {
-      // Check if we got meaningful data
-      const hasData = boardingPassData.passengerName || boardingPassData.flightNumber || boardingPassData.seat;
-      if (!hasData) {
-        addNotification(
-          'warning',
-          'Limited data extracted',
-          `Barcode detected but could not extract passenger name, flight number, or seat. Raw data: ${barcodeText}`
-        );
-      } else {
-        addNotification('success', 'Boarding pass parsed successfully', 
-          `Extracted: ${boardingPassData.passengerName ? 'Name: ' + boardingPassData.passengerName + ', ' : ''}${boardingPassData.flightNumber ? 'Flight: ' + boardingPassData.flightNumber + ', ' : ''}${boardingPassData.seat ? 'Seat: ' + boardingPassData.seat : ''}`
-        );
-      }
-    }
-    
-    // Try to find matching passenger in the list
-    const passenger = findPassengerFromBarcode(barcodeText);
-    
-    if (passenger) {
-      if (passenger.status === 'verified') {
-        addNotification('warning', 'Passenger already verified', `${passenger.name} (Seat ${passenger.seat}) was already verified`);
-      } else {
-        addNotification('success', 'Passenger matched', `Found matching passenger: ${passenger.name} (Seat ${passenger.seat})`);
-      }
-    } else {
-      addNotification('warning', 'Passenger not found', 'Barcode detected but passenger not found in flight manifest');
-    }
-    
-    // Display the scanned boarding pass details
-    setScanResult({
+    // Create scan result object
+    const scanData = {
+      id: Date.now().toString(),
       success: true,
       source: source,
       boardingPass: boardingPassData,
-      passenger: passenger || null,
-      flight: selectedFlight,
       scanTime: scanTime,
-      barcodeText: barcodeText
-    });
+      scanDate: scanDate,
+      barcodeText: barcodeText,
+      timestamp: new Date().toISOString()
+    };
     
-    // If we found a matching passenger, update their status
-    if (passenger && passenger.status === 'pending') {
-      setPassengers(prev => prev.map(p => 
-        p.id === passenger.id 
-          ? { ...p, status: 'verified', scanTime: scanTime }
-          : p
-      ));
-    }
+    // Add to recent scans (most recent first)
+    setRecentScans(prev => [scanData, ...prev].slice(0, 10)); // Keep last 10 scans
     
-    // Resume scanning after 3 seconds (longer to read the details)
+    // Display the scanned boarding pass details
+    setScanResult(scanData);
+    
+    // Resume scanning after 3 seconds
     setTimeout(() => {
       setScanResult(null);
       if (streamRef.current && isScanning && videoRef.current) {
@@ -901,37 +556,6 @@ export default function MobileScanner() {
     }, 3000);
   };
 
-  // Helper function to find passenger from barcode data
-  const findPassengerFromBarcode = (barcodeText: string): any => {
-    // Boarding pass barcodes contain encoded data
-    // For demo, we'll try simple matching
-    // In production, you'd parse the barcode according to airline format (IATA, etc.)
-    
-    // Try matching by passenger ID, seat, or name fragments
-    const passenger = passengers.find(p => {
-      // Try exact ID match
-      if (barcodeText.includes(p.id)) return true;
-      
-      // Try seat match (e.g., "32L" in barcode)
-      if (barcodeText.includes(p.seat)) return true;
-      
-      // Try name fragments (boarding passes often contain name parts)
-      const nameParts = p.name.split('/').map((part: string) => part.trim().toUpperCase());
-      if (nameParts.some((part: string) => part.length > 2 && barcodeText.toUpperCase().includes(part))) {
-        return true;
-      }
-      
-      // Try flight number match (if barcode contains flight info)
-      if (selectedFlight && barcodeText.includes(selectedFlight.replace(/\s/g, ''))) {
-        // If flight matches, try to match by other criteria
-        return barcodeText.includes(p.seat) || barcodeText.includes(p.id);
-      }
-      
-      return false;
-    });
-    
-    return passenger;
-  };
 
   // Capture and scan from image (fallback method) - using ZXing, then OCR
   const captureAndScan = async () => {
@@ -1041,78 +665,6 @@ export default function MobileScanner() {
     setIsScanning(false);
   };
 
-  // Handle scan success (mock - in real app, this would process QR code)
-  const handleScanSuccess = () => {
-    // Find next pending passenger to verify (in real app, this would come from QR code scan)
-    const nextPendingPassenger = passengers.find(p => p.status === 'pending');
-    
-    if (nextPendingPassenger) {
-      const scanTime = new Date().toLocaleTimeString();
-      
-      // Simulate successful scan
-      setScanResult({
-        success: true,
-        passenger: nextPendingPassenger,
-        flight: selectedFlight,
-        scanTime: scanTime
-      });
-      
-      // Update passenger status
-      setPassengers(prev => prev.map(p => 
-        p.id === nextPendingPassenger.id 
-          ? { ...p, status: 'verified', scanTime: scanTime }
-          : p
-      ));
-
-      // Stop camera after 2 seconds and continue scanning
-      setTimeout(() => {
-        setScanResult(null);
-        // Camera continues running for next scan
-      }, 2000);
-    } else {
-      // All passengers verified
-      setScanResult({
-        success: true,
-        passenger: null,
-        flight: selectedFlight,
-        scanTime: new Date().toLocaleTimeString(),
-        message: 'All passengers verified!'
-      });
-      
-      setTimeout(() => {
-        stopCamera();
-        setCurrentView('flight-selection');
-        setSelectedFlight('');
-        setPassengers([]);
-        setScanResult(null);
-      }, 2000);
-    }
-  };
-
-  // Start camera automatically when camera view opens, and cleanup on exit
-  useEffect(() => {
-    if (currentView === 'camera') {
-      // Always try to start camera when entering camera view
-      if (!isScanning && !streamRef.current) {
-        startCamera().catch(() => {
-          // If camera fails to start, show permission prompt if needed
-          if (cameraPermission === 'denied' || cameraPermission === 'prompt') {
-            setShowPermissionPrompt(true);
-          }
-        });
-      }
-    }
-    
-    return () => {
-      if (currentView !== 'camera') {
-        stopCamera();
-      }
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentView]);
-
-  // Get selected flight details
-  const flightDetails = flights.find(f => f.flight === selectedFlight);
 
   return (
     <div className="min-h-screen bg-[#1e3a5f] flex flex-col">
@@ -1188,80 +740,8 @@ export default function MobileScanner() {
             </div>
           </div>
 
-          {/* Flight Selection View */}
-          {currentView === 'flight-selection' && (
-            <>
-              <div className="mb-6">
-                <h2 className="text-xl sm:text-2xl font-bold text-gray-900 mb-4 sm:mb-6">Select Flight</h2>
-                
-                {/* Date Selection */}
-                <div className="mb-4">
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Flight Date
-                  </label>
-                  <input
-                    type="date"
-                    value={selectedDate}
-                    onChange={(e) => setSelectedDate(e.target.value)}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  />
-                </div>
-
-                {/* Flight Number Selection */}
-                <div className="mb-6">
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Flight Number
-                  </label>
-                  <select
-                    value={selectedFlight}
-                    onChange={(e) => setSelectedFlight(e.target.value)}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  >
-                    <option value="">Select a flight</option>
-                    {availableFlights.map((flight) => (
-                      <option key={flight.flight} value={flight.flight}>
-                        {flight.flight} - {flight.route.origin} → {flight.route.intermediate} → {flight.route.destination}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* Flight Details Preview */}
-                {selectedFlight && flightDetails && (
-                  <div className="bg-blue-50 rounded-lg p-4 mb-6 border border-blue-200">
-                    <div className="flex items-center justify-between mb-2">
-                      <div>
-                        <h3 className="text-lg font-bold text-gray-900">{flightDetails.flight}</h3>
-                        <p className="text-sm text-gray-600">
-                          {flightDetails.route.origin} → <span className="text-yellow-600 font-semibold">{flightDetails.route.intermediate}</span> → {flightDetails.route.destination}
-                        </p>
-                      </div>
-                    </div>
-                    <div className="text-sm text-gray-600 space-y-1">
-                      <p>Gate: {flightDetails.gate}</p>
-                      <p>Departure: {flightDetails.depTime} | Arrival: {flightDetails.arrTime}</p>
-                      <p>Disembarking: {flightDetails.passengers.disembarking} passengers</p>
-                    </div>
-                  </div>
-                )}
-
-                {/* Continue Button */}
-                <button
-                  onClick={handleFlightSelect}
-                  disabled={!selectedFlight}
-                  className="w-full bg-blue-600 text-white rounded-full py-3 sm:py-4 flex items-center justify-center gap-2 hover:bg-blue-700 active:bg-blue-800 transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed touch-manipulation"
-                >
-                  Start Scanning
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                  </svg>
-                </button>
-              </div>
-            </>
-          )}
-
           {/* Camera View */}
-          {currentView === 'camera' && flightDetails && (
+          {currentView === 'camera' && (
             <>
               {/* Permission Prompt Overlay */}
               {showPermissionPrompt && cameraPermission !== 'granted' && (
@@ -1295,7 +775,6 @@ export default function MobileScanner() {
                       <button
                         onClick={() => {
                           setShowPermissionPrompt(false);
-                          setCurrentView('flight-selection');
                         }}
                         className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors"
                       >
@@ -1312,54 +791,43 @@ export default function MobileScanner() {
                 </div>
               )}
 
-              {/* Back Button */}
-              <button
-                onClick={() => {
-                  stopCamera();
-                  setCurrentView('flight-selection');
-                  setSelectedFlight('');
-                  setPassengers([]);
-                  setScanResult(null);
-                  setShowPermissionPrompt(false);
-                }}
-                className="text-blue-600 hover:text-blue-700 mb-4 flex items-center gap-1 text-sm"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-                </svg>
-                Back to Flight Selection
-              </button>
-
-              {/* Flight Info Header */}
-              <div className="mb-4 sm:mb-6">
-                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-2 gap-2">
-                  <div>
-                    <h2 className="text-xl sm:text-2xl font-bold text-gray-900">Flight {flightDetails.flight}</h2>
-                    <p className="text-xs sm:text-sm text-gray-600">
-                      {flightDetails.route.origin} → <span className="text-yellow-600 font-semibold">{flightDetails.route.intermediate}</span> → {flightDetails.route.destination}
-                    </p>
+              {/* Recent Scans - Above Camera */}
+              {recentScans.length > 0 && (
+                <div className="mb-4 sm:mb-6">
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-sm font-semibold text-gray-900">Recent Scans</h3>
+                    <span className="text-sm text-gray-600">{recentScans.length} scanned</span>
                   </div>
-                  <span className="px-2 sm:px-3 py-1 bg-green-500 text-white rounded-full text-xs font-medium self-start sm:self-auto">
-                    Online
-                  </span>
-                </div>
-                <div className="mt-4">
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-sm text-gray-600">Verification Progress</span>
-                    <span className="text-sm font-semibold text-gray-900">
-                      {passengers.filter(p => p.status === 'verified').length}/{passengers.length}
-                    </span>
-                  </div>
-                  <div className="w-full bg-gray-200 rounded-full h-2">
-                    <div 
-                      className="bg-green-500 h-2 rounded-full"
-                      style={{ 
-                        width: `${passengers.length > 0 ? (passengers.filter(p => p.status === 'verified').length / passengers.length) * 100 : 0}%` 
-                      }}
-                    ></div>
+                  <div className="space-y-2 max-h-48 overflow-y-auto">
+                    {recentScans.slice(0, 5).map((scan) => (
+                      <div key={scan.id} className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1">
+                            {scan.boardingPass.passengerName && (
+                              <p className="text-sm font-semibold text-gray-900">{scan.boardingPass.passengerName}</p>
+                            )}
+                            <div className="flex flex-wrap gap-2 mt-1">
+                              {scan.boardingPass.flightNumber && (
+                                <span className="text-xs text-gray-600">Flight: {scan.boardingPass.flightNumber}</span>
+                              )}
+                              {scan.boardingPass.seat && (
+                                <span className="text-xs text-gray-600">Seat: {scan.boardingPass.seat}</span>
+                              )}
+                              {scan.boardingPass.pnr && (
+                                <span className="text-xs text-gray-600">PNR: {scan.boardingPass.pnr}</span>
+                              )}
+                            </div>
+                            <p className="text-xs text-gray-500 mt-1">{scan.scanTime} • {scan.source}</p>
+                          </div>
+                          <svg className="w-5 h-5 text-green-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          </svg>
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 </div>
-              </div>
+              )}
 
               {/* Camera Scanner Frame - using ZXing */}
               <div className="relative mb-4 sm:mb-6">
@@ -1415,85 +883,6 @@ export default function MobileScanner() {
                     </div>
                   )}
 
-                  {/* Success overlay - Show boarding pass details */}
-                  {scanResult && scanResult.success && scanResult.boardingPass && (
-                    <div className="absolute inset-0 bg-white bg-opacity-95 flex items-center justify-center z-20 overflow-y-auto">
-                      <div className="w-full max-w-sm p-6 text-center">
-                        <div className="w-16 h-16 bg-green-500 rounded-full flex items-center justify-center mb-4 mx-auto">
-                          <svg className="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
-                          </svg>
-                        </div>
-                        <p className="text-2xl font-bold text-gray-900 mb-6">Boarding Pass Scanned</p>
-                        
-                        {/* Boarding Pass Details */}
-                        <div className="bg-gray-50 rounded-lg p-4 mb-4 text-left space-y-3">
-                          {scanResult.boardingPass.passengerName && (
-                            <div>
-                              <p className="text-xs text-gray-500 uppercase">Passenger Name</p>
-                              <p className="text-base font-semibold text-gray-900">{scanResult.boardingPass.passengerName}</p>
-                            </div>
-                          )}
-                          
-                          {scanResult.boardingPass.flightNumber && (
-                            <div>
-                              <p className="text-xs text-gray-500 uppercase">Flight Number</p>
-                              <p className="text-base font-semibold text-gray-900">{scanResult.boardingPass.flightNumber}</p>
-                            </div>
-                          )}
-                          
-                          {scanResult.boardingPass.seat && (
-                            <div>
-                              <p className="text-xs text-gray-500 uppercase">Seat</p>
-                              <p className="text-base font-semibold text-gray-900">{scanResult.boardingPass.seat}</p>
-                            </div>
-                          )}
-                          
-                          {scanResult.boardingPass.date && (
-                            <div>
-                              <p className="text-xs text-gray-500 uppercase">Date</p>
-                              <p className="text-base font-semibold text-gray-900">{scanResult.boardingPass.date}</p>
-                            </div>
-                          )}
-                          
-                          {scanResult.boardingPass.pnr && (
-                            <div>
-                              <p className="text-xs text-gray-500 uppercase">PNR</p>
-                              <p className="text-base font-semibold text-gray-900">{scanResult.boardingPass.pnr}</p>
-                            </div>
-                          )}
-                          
-                          {scanResult.boardingPass.airline && (
-                            <div>
-                              <p className="text-xs text-gray-500 uppercase">Airline</p>
-                              <p className="text-base font-semibold text-gray-900">{scanResult.boardingPass.airline}</p>
-                            </div>
-                          )}
-                          
-                          {/* Show raw barcode if no structured data found */}
-                          {!scanResult.boardingPass.passengerName && !scanResult.boardingPass.flightNumber && (
-                            <div>
-                              <p className="text-xs text-gray-500 uppercase mb-2">Barcode Data</p>
-                              <p className="text-xs font-mono text-gray-700 break-all bg-white p-2 rounded border">
-                                {scanResult.barcodeText || scanResult.boardingPass.raw}
-                              </p>
-                            </div>
-                          )}
-                        </div>
-                        
-                        {/* Matched Passenger Info */}
-                        {scanResult.passenger && (
-                          <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4">
-                            <p className="text-xs text-blue-600 uppercase mb-1">Matched Passenger</p>
-                            <p className="text-sm font-semibold text-blue-900">{scanResult.passenger.name}</p>
-                            <p className="text-xs text-blue-700">Seat {scanResult.passenger.seat}</p>
-                          </div>
-                        )}
-                        
-                        <p className="text-xs text-gray-500 mt-4">Scanning will resume automatically...</p>
-                      </div>
-                    </div>
-                  )}
                 </div>
                 
                 {/* Floating Camera Button - Only to start camera */}
@@ -1528,15 +917,88 @@ export default function MobileScanner() {
               </div>
 
               
+              {/* Current Scan Result - Below Camera */}
+              {scanResult && scanResult.success && scanResult.boardingPass && (
+                <div className="mt-4 sm:mt-6 bg-green-50 border-2 border-green-200 rounded-lg p-4 sm:p-6">
+                  <div className="flex items-center gap-2 mb-4">
+                    <div className="w-10 h-10 bg-green-500 rounded-full flex items-center justify-center">
+                      <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                      </svg>
+                    </div>
+                    <div>
+                      <h3 className="text-lg font-bold text-gray-900">Boarding Pass Scanned</h3>
+                      <p className="text-xs text-gray-600">{scanResult.scanTime} • {scanResult.source}</p>
+                    </div>
+                  </div>
+                  
+                  {/* Boarding Pass Details */}
+                  <div className="bg-white rounded-lg p-4 space-y-3">
+                    {scanResult.boardingPass.passengerName && (
+                      <div>
+                        <p className="text-xs text-gray-500 uppercase mb-1">Passenger Name</p>
+                        <p className="text-base font-semibold text-gray-900">{scanResult.boardingPass.passengerName}</p>
+                      </div>
+                    )}
+                    
+                    <div className="grid grid-cols-2 gap-3">
+                      {scanResult.boardingPass.flightNumber && (
+                        <div>
+                          <p className="text-xs text-gray-500 uppercase mb-1">Flight Number</p>
+                          <p className="text-sm font-semibold text-gray-900">{scanResult.boardingPass.flightNumber}</p>
+                        </div>
+                      )}
+                      
+                      {scanResult.boardingPass.seat && (
+                        <div>
+                          <p className="text-xs text-gray-500 uppercase mb-1">Seat</p>
+                          <p className="text-sm font-semibold text-gray-900">{scanResult.boardingPass.seat}</p>
+                        </div>
+                      )}
+                      
+                      {scanResult.boardingPass.date && (
+                        <div>
+                          <p className="text-xs text-gray-500 uppercase mb-1">Date</p>
+                          <p className="text-sm font-semibold text-gray-900">{scanResult.boardingPass.date}</p>
+                        </div>
+                      )}
+                      
+                      {scanResult.boardingPass.pnr && (
+                        <div>
+                          <p className="text-xs text-gray-500 uppercase mb-1">PNR</p>
+                          <p className="text-sm font-semibold text-gray-900">{scanResult.boardingPass.pnr}</p>
+                        </div>
+                      )}
+                    </div>
+                    
+                    {scanResult.boardingPass.airline && (
+                      <div>
+                        <p className="text-xs text-gray-500 uppercase mb-1">Airline</p>
+                        <p className="text-sm font-semibold text-gray-900">{scanResult.boardingPass.airline}</p>
+                      </div>
+                    )}
+                    
+                    {/* Show raw barcode if no structured data found */}
+                    {!scanResult.boardingPass.passengerName && !scanResult.boardingPass.flightNumber && (
+                      <div>
+                        <p className="text-xs text-gray-500 uppercase mb-2">Barcode Data</p>
+                        <p className="text-xs font-mono text-gray-700 break-all bg-gray-50 p-2 rounded border">
+                          {scanResult.barcodeText || scanResult.boardingPass.raw}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
               {/* Instructions */}
-              <div className="text-center text-sm text-gray-600 space-y-1 mb-4 mt-8">
+              <div className="text-center text-sm text-gray-600 space-y-1 mt-4">
                 <p>{isScanning ? 'Point camera at boarding pass barcode - scanning automatically, or tap the green button to capture & scan' : 'Tap the camera button to start scanning'}</p>
-                <p>Works offline - syncs automatically when online</p>
               </div>
               
               {/* Reset Scanning Button - appears if scanning is stuck */}
               {isScanning && scanningActiveRef.current && (
-                <div className="text-center mb-4">
+                <div className="text-center mt-2">
                   <button
                     onClick={() => {
                       console.log('Manual reset of scanning');
@@ -1554,69 +1016,6 @@ export default function MobileScanner() {
                   </button>
                 </div>
               )}
-
-              {/* Recent Scans */}
-              <div className="border-t border-gray-200 pt-4">
-                <div className="flex items-center justify-between mb-3">
-                  <h3 className="text-sm font-semibold text-gray-900">Recent Scans</h3>
-                  <span className="text-sm text-gray-600">
-                    {passengers.filter(p => p.status === 'verified').length} verified
-                  </span>
-                </div>
-                <div className="space-y-2 mb-4">
-                  {passengers
-                    .filter(p => p.status === 'verified')
-                    .sort((a, b) => {
-                      // Sort by scanTime, most recent first
-                      if (!a.scanTime && !b.scanTime) return 0;
-                      if (!a.scanTime) return 1;
-                      if (!b.scanTime) return -1;
-                      return b.scanTime.localeCompare(a.scanTime);
-                    })
-                    .slice(0, 3)
-                    .map((passenger) => (
-                      <div key={passenger.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                        <div className="flex items-center gap-3">
-                          <span className="px-2 py-1 bg-yellow-100 text-yellow-700 rounded text-xs font-medium">
-                            OFF
-                          </span>
-                          <div>
-                            <p className="text-sm font-semibold text-gray-900">{passenger.name}</p>
-                            <p className="text-xs text-gray-500">Seat {passenger.seat} • {passenger.scanTime || 'Just now'}</p>
-                          </div>
-                        </div>
-                        <svg className="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                        </svg>
-                      </div>
-                    ))}
-                </div>
-                
-                {/* Summary */}
-                <div className="bg-gray-50 rounded-lg p-4 mb-4">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-sm text-gray-600">
-                      {passengers.filter(p => p.status === 'verified').length} Verified
-                    </span>
-                    <span className="text-sm text-gray-600">
-                      {passengers.filter(p => p.status === 'pending').length} Pending
-                    </span>
-                    <span className="text-sm font-semibold text-green-600">
-                      {passengers.length > 0 ? Math.round((passengers.filter(p => p.status === 'verified').length / passengers.length) * 100) : 0}% Complete
-                    </span>
-                  </div>
-                </div>
-
-                {/* Action Buttons */}
-                <div className="flex flex-col sm:flex-row gap-2">
-                  <button className="flex-1 bg-blue-600 text-white rounded-lg py-2.5 sm:py-2 px-4 text-sm font-medium hover:bg-blue-700 active:bg-blue-800 transition-colors touch-manipulation">
-                    Sync Now
-                  </button>
-                  <button className="flex-1 bg-white text-gray-700 border border-gray-300 rounded-lg py-2.5 sm:py-2 px-4 text-sm font-medium hover:bg-gray-50 active:bg-gray-100 transition-colors touch-manipulation">
-                    View Manifest
-                  </button>
-                </div>
-              </div>
             </>
           )}
         </div>
