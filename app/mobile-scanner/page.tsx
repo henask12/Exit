@@ -16,6 +16,7 @@ export default function MobileScanner() {
   const [cameraPermission, setCameraPermission] = useState<'prompt' | 'granted' | 'denied' | 'checking'>('checking');
   const [showPermissionPrompt, setShowPermissionPrompt] = useState(false);
   const [notifications, setNotifications] = useState<Array<{id: string, type: 'success' | 'error' | 'warning' | 'info', message: string, details?: string}>>([]);
+  const [apiConnectionError, setApiConnectionError] = useState<string | null>(null);
   
   const videoRef = useRef<HTMLVideoElement>(null);
   const codeReaderRef = useRef<BrowserMultiFormatReader | null>(null);
@@ -353,9 +354,21 @@ export default function MobileScanner() {
                 }
               }, 3000);
             }
-          } catch (apiError) {
-            // Silently fail - don't spam notifications for continuous scanning
-            console.log('API scan attempt failed (normal during continuous scanning):', apiError);
+          } catch (apiError: any) {
+            // Handle API errors gracefully during continuous scanning
+            const errorMessage = apiError?.message || 'Unknown error';
+            
+            // Only show notification for connection errors (not for normal "no barcode found" cases)
+            if (errorMessage.includes('Cannot connect') || errorMessage.includes('Network error')) {
+              // Show error notification only once, not on every failed attempt
+              if (!apiConnectionError || apiConnectionError !== errorMessage) {
+                console.error('API connection error:', apiError);
+                // Don't spam notifications - only log
+              }
+            } else {
+              // Other errors (like "no barcode found") are normal during scanning
+              console.log('API scan attempt failed (normal during continuous scanning):', apiError);
+            }
           }
         }, 'image/jpeg', 0.9);
         
@@ -747,8 +760,7 @@ export default function MobileScanner() {
       const response = await fetch('http://exit.runasp.net/api/BoardingPass/scan', {
         method: 'POST',
         body: formData,
-        // Note: For localhost with self-signed cert, browser may block the request
-        // In production, use proper SSL certificate or handle CORS appropriately
+        // Note: CORS must be enabled on the API server
       });
       
       if (!response.ok) {
@@ -757,11 +769,27 @@ export default function MobileScanner() {
       }
       
       const data = await response.json();
+      // Clear any previous connection errors on success
+      setApiConnectionError(null);
       return data;
-    } catch (error) {
+    } catch (error: any) {
       console.error('API scan error:', error);
-      // Re-throw to let caller handle
-      throw error;
+      
+      // Determine error type and set appropriate message
+      let errorMessage = 'Unknown error';
+      if (error.message && error.message.includes('Failed to fetch')) {
+        errorMessage = 'Cannot connect to API server. Please check:\n- API server is running\n- CORS is enabled on the API\n- Network connectivity';
+        setApiConnectionError('Connection failed - API server may be unreachable');
+      } else if (error.message && error.message.includes('NetworkError')) {
+        errorMessage = 'Network error - please check your connection';
+        setApiConnectionError('Network error');
+      } else if (error.message) {
+        errorMessage = error.message;
+        setApiConnectionError(error.message);
+      }
+      
+      // Re-throw with improved error message
+      throw new Error(errorMessage);
     }
   };
 
@@ -1066,6 +1094,29 @@ export default function MobileScanner() {
                       </div>
                     ))}
                   </div>
+                </div>
+              )}
+
+              {/* API Connection Error Banner */}
+              {apiConnectionError && (
+                <div className="mb-4 bg-red-50 border border-red-200 rounded-lg p-3 flex items-start gap-3">
+                  <svg className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <div className="flex-1">
+                    <p className="text-sm font-semibold text-red-800">API Connection Error</p>
+                    <p className="text-xs text-red-700 mt-1">{apiConnectionError}</p>
+                    <p className="text-xs text-red-600 mt-1">Please ensure the API server is running and CORS is enabled.</p>
+                  </div>
+                  <button
+                    onClick={() => setApiConnectionError(null)}
+                    className="text-red-600 hover:text-red-800"
+                    title="Dismiss"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
                 </div>
               )}
 
