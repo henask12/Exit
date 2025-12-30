@@ -158,11 +158,11 @@ export default function MobileScanner() {
     }
   }, [cameraPermission]);
 
-  // Start camera - ZXing's decodeFromVideoDevice manages the camera stream
+  // Start camera - get camera stream and assign to video element
   const startCamera = async () => {
     try {
-      if (!videoRef.current || !codeReaderRef.current) {
-        addNotification('error', 'Camera not ready', 'Please wait for camera to initialize');
+      if (!videoRef.current) {
+        addNotification('error', 'Camera not ready', 'Video element not available');
         return;
       }
 
@@ -172,17 +172,63 @@ export default function MobileScanner() {
         return;
       }
 
+      // Stop any existing stream first
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
+        streamRef.current = null;
+      }
+
       // Ensure video element is properly configured
+      videoRef.current.setAttribute('playsinline', 'true');
+      videoRef.current.setAttribute('webkit-playsinline', 'true');
+      videoRef.current.muted = true;
+      videoRef.current.playsInline = true;
+      
+      // Get camera stream
+      const constraints: MediaStreamConstraints = {
+        video: {
+          facingMode: 'environment', // Prefer back camera on mobile
+          width: { ideal: 1280 },
+          height: { ideal: 720 }
+        },
+        audio: false
+      };
+
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      streamRef.current = stream;
+      
+      // Assign stream to video element
       if (videoRef.current) {
-        videoRef.current.setAttribute('playsinline', 'true');
-        videoRef.current.setAttribute('webkit-playsinline', 'true');
-        videoRef.current.muted = true;
+        videoRef.current.srcObject = stream;
+        
+        // Wait for video to be ready
+        await new Promise<void>((resolve, reject) => {
+          if (!videoRef.current) {
+            reject(new Error('Video element not available'));
+            return;
+          }
+
+          const onLoadedMetadata = () => {
+            videoRef.current?.removeEventListener('loadedmetadata', onLoadedMetadata);
+            videoRef.current?.play().then(() => {
+              resolve();
+            }).catch(reject);
+          };
+
+          videoRef.current.addEventListener('loadedmetadata', onLoadedMetadata);
+          
+          // Timeout after 5 seconds
+          setTimeout(() => {
+            videoRef.current?.removeEventListener('loadedmetadata', onLoadedMetadata);
+            reject(new Error('Video stream timeout'));
+          }, 5000);
+        });
       }
       
       setIsScanning(true);
+      addNotification('success', 'Camera started', 'Camera is ready for scanning');
       
-      // ZXing's decodeFromVideoDevice will handle camera access and video stream
-      // Start scanning - this will request camera permission and start the stream
+      // Start scanning after camera is ready
       startBoardingPassScanning();
       
     } catch (error: any) {
@@ -192,6 +238,7 @@ export default function MobileScanner() {
       if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
         setCameraPermission('denied');
         setShowPermissionPrompt(true);
+        addNotification('error', 'Camera permission denied', 'Please allow camera access to scan boarding passes');
       } else {
         const errorMessage = error?.message || error?.toString() || 'Unknown error';
         addNotification('error', 'Camera error', `Failed to start camera: ${errorMessage}`);
