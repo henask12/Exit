@@ -336,8 +336,8 @@ export default function MobileScanner() {
                 timestamp: new Date().toISOString()
               };
               
-              // Add to recent scans
-              setRecentScans(prev => [scanData, ...prev].slice(0, 10));
+              // Add to recent scans (save all scans, no limit)
+              setRecentScans(prev => [scanData, ...prev]);
               
               // Display result
               setScanResult(scanData);
@@ -734,8 +734,8 @@ export default function MobileScanner() {
       timestamp: new Date().toISOString()
     };
     
-    // Add to recent scans (most recent first)
-    setRecentScans(prev => [scanData, ...prev].slice(0, 10)); // Keep last 10 scans
+    // Add to recent scans (most recent first, save all scans)
+    setRecentScans(prev => [scanData, ...prev]);
     
     // Display the scanned boarding pass details
     setScanResult(scanData);
@@ -806,58 +806,6 @@ export default function MobileScanner() {
     }
   };
 
-  // Save image to gallery
-  const saveImageToGallery = async (blob: Blob, filename: string = 'boarding-pass.jpg') => {
-    try {
-      // Try using File System Access API (Chrome/Edge)
-      if ('showSaveFilePicker' in window) {
-        try {
-          const fileHandle = await (window as any).showSaveFilePicker({
-            suggestedName: filename,
-            types: [{
-              description: 'JPEG Image',
-              accept: { 'image/jpeg': ['.jpg', '.jpeg'] }
-            }]
-          });
-          
-          const writable = await fileHandle.createWritable();
-          await writable.write(blob);
-          await writable.close();
-          
-          addNotification('success', 'Image saved', 'Image saved to your device');
-          return true;
-        } catch (saveError: any) {
-          // User cancelled or error occurred, fall through to download method
-          if (saveError.name !== 'AbortError') {
-            console.log('File System Access API failed, using download method:', saveError);
-          }
-        }
-      }
-      
-      // Fallback: Download method (works on all browsers)
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = filename;
-      link.style.display = 'none';
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      
-      // Clean up the URL after a delay
-      setTimeout(() => {
-        URL.revokeObjectURL(url);
-      }, 100);
-      
-      addNotification('success', 'Image saved', 'Image downloaded to your device');
-      return true;
-    } catch (error) {
-      console.error('Error saving image:', error);
-      addNotification('error', 'Save failed', 'Could not save image to gallery');
-      return false;
-    }
-  };
-
   // Handle native camera capture
   const handleNativeCameraCapture = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -876,11 +824,7 @@ export default function MobileScanner() {
       // Convert file to blob
       const blob = await file.arrayBuffer().then(buffer => new Blob([buffer], { type: file.type }));
       
-      // Save image to gallery first
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      await saveImageToGallery(blob, `boarding-pass-${timestamp}.jpg`);
-      
-      // Send to API for scanning
+      // Send to API for scanning (don't save yet)
       const apiResult = await scanBoardingPassAPI(blob);
       
       if (apiResult.success && apiResult.decodedText) {
@@ -899,18 +843,24 @@ export default function MobileScanner() {
           scanTime: new Date().toLocaleTimeString(),
           scanDate: new Date().toLocaleDateString(),
           barcodeText: decodedText,
-          barcodeFormat: apiResult.barcodeFormat,
-          ocrConfidence: apiResult.ocrConfidence,
-          timestamp: new Date().toISOString()
-        };
-        
-        // Add to recent scans
-        setRecentScans(prev => [scanData, ...prev].slice(0, 10));
+              barcodeFormat: apiResult.barcodeFormat,
+              ocrConfidence: apiResult.ocrConfidence,
+              timestamp: new Date().toISOString()
+            };
+            
+            // Add to recent scans (save all scans, no limit)
+        setRecentScans(prev => [scanData, ...prev]);
         
         // Display result
         setScanResult(scanData);
         
         addNotification('success', `${scanType} scan successful!`, `Detected: ${boardingPassData.passengerName || boardingPassData.flightNumber || 'Boarding pass'}`);
+        
+        // Clear result after 2 seconds to be ready for next capture
+        setTimeout(() => {
+          setScanResult(null);
+          addNotification('info', 'Ready for next scan', 'Camera ready to capture again');
+        }, 2000);
       } else {
         addNotification('warning', 'Scan failed', apiResult.error || 'Could not decode boarding pass');
       }
@@ -963,11 +913,7 @@ export default function MobileScanner() {
         }
         
         try {
-          // Save image to gallery
-          const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-          await saveImageToGallery(blob, `boarding-pass-${timestamp}.jpg`);
-          
-          // Send to API
+          // Send to API (don't save yet)
           console.log('📤 Sending image to API for scanning...', {
             blobSize: blob.size,
             blobType: blob.type,
@@ -1005,20 +951,41 @@ export default function MobileScanner() {
               timestamp: new Date().toISOString()
             };
             
-            // Add to recent scans
-            setRecentScans(prev => [scanData, ...prev].slice(0, 10));
+            // Add to recent scans (save all scans, no limit)
+            setRecentScans(prev => [scanData, ...prev]);
             
             // Display result
             setScanResult(scanData);
             
             addNotification('success', `${scanType} scan successful!`, `Detected: ${boardingPassData.passengerName || boardingPassData.flightNumber || 'Boarding pass'}`);
+            
+            // Clear result after 2 seconds to be ready for next capture
+            setTimeout(() => {
+              setScanResult(null);
+              // Resume camera scanning if still active
+              if (streamRef.current && isScanning && videoRef.current) {
+                addNotification('info', 'Ready for next scan', 'Camera ready to capture again');
+              }
+            }, 2000);
           } else {
             addNotification('warning', 'Scan failed', apiResult.error || 'Could not decode boarding pass');
+            // Still ready for next capture even on failure
+            setTimeout(() => {
+              if (streamRef.current && isScanning && videoRef.current) {
+                addNotification('info', 'Ready for next scan', 'Camera ready to capture again');
+              }
+            }, 2000);
           }
         } catch (apiError) {
           console.error('API scan error:', apiError);
           const errorMessage = apiError instanceof Error ? apiError.message : String(apiError);
           addNotification('error', 'API Error', `Failed to scan: ${errorMessage}`);
+          // Still ready for next capture even on error
+          setTimeout(() => {
+            if (streamRef.current && isScanning && videoRef.current) {
+              addNotification('info', 'Ready for next scan', 'Camera ready to capture again');
+            }
+          }, 2000);
         }
       }, 'image/jpeg', 0.9);
       
@@ -1182,8 +1149,8 @@ export default function MobileScanner() {
                     <h3 className="text-sm font-semibold text-gray-900">Recent Scans</h3>
                     <span className="text-sm text-gray-600">{recentScans.length} scanned</span>
                   </div>
-                  <div className="space-y-2 max-h-48 overflow-y-auto">
-                    {recentScans.slice(0, 5).map((scan) => (
+                  <div className="space-y-2 max-h-96 overflow-y-auto">
+                    {recentScans.map((scan) => (
                       <div key={scan.id} className="bg-gray-50 rounded-lg p-3 border border-gray-200">
                         <div className="flex items-start justify-between">
                           <div className="flex-1">
