@@ -17,6 +17,7 @@ export default function MobileScanner() {
   const [showPermissionPrompt, setShowPermissionPrompt] = useState(false);
   const [notifications, setNotifications] = useState<Array<{id: string, type: 'success' | 'error' | 'warning' | 'info', message: string, details?: string}>>([]);
   const [apiConnectionError, setApiConnectionError] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
   
   const videoRef = useRef<HTMLVideoElement>(null);
   const codeReaderRef = useRef<BrowserMultiFormatReader | null>(null);
@@ -303,6 +304,7 @@ export default function MobileScanner() {
           }
           
           try {
+            setIsLoading(true);
             
             // Send to API
             const apiResult = await scanBoardingPassAPI(blob);
@@ -369,6 +371,8 @@ export default function MobileScanner() {
               // Other errors (like "no barcode found") are normal during scanning
               console.log('API scan attempt failed (normal during continuous scanning):', apiError);
             }
+          } finally {
+            setIsLoading(false);
           }
         }, 'image/jpeg', 0.9);
         
@@ -819,7 +823,7 @@ export default function MobileScanner() {
     }
     
     try {
-      addNotification('info', 'Processing image...', 'Sending to API for scanning...');
+      setIsLoading(true);
       
       // Convert file to blob
       const blob = await file.arrayBuffer().then(buffer => new Blob([buffer], { type: file.type }));
@@ -868,6 +872,8 @@ export default function MobileScanner() {
       console.error('Error processing native camera image:', error);
       const errorMessage = error instanceof Error ? error.message : String(error);
       addNotification('error', 'Processing failed', `Error: ${errorMessage}`);
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -913,6 +919,8 @@ export default function MobileScanner() {
         }
         
         try {
+          setIsLoading(true);
+          
           // Send to API (don't save yet)
           console.log('📤 Sending image to API for scanning...', {
             blobSize: blob.size,
@@ -976,7 +984,7 @@ export default function MobileScanner() {
               // }
             }, 100);
           }
-        } catch (apiError) {
+          } catch (apiError) {
           console.error('API scan error:', apiError);
           const errorMessage = apiError instanceof Error ? apiError.message : String(apiError);
           addNotification('error', 'API Error', `Failed to scan: ${errorMessage}`);
@@ -985,7 +993,9 @@ export default function MobileScanner() {
               // if (streamRef.current && isScanning && videoRef.current) {
               //   addNotification('info', 'Ready for next scan', 'Camera ready to capture again');
               // }
-          }, 100);
+           }, 100);
+        } finally {
+          setIsLoading(false);
         }
       }, 'image/jpeg', 0.9);
       
@@ -1226,6 +1236,23 @@ export default function MobileScanner() {
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
                       </svg>
                       <p className="text-sm opacity-75">Position boarding pass in frame</p>
+                    </div>
+                  )}
+
+                  {/* Loading Overlay */}
+                  {isLoading && (
+                    <div className="absolute inset-0 bg-black bg-opacity-60 flex items-center justify-center z-20 rounded-lg">
+                      <div className="bg-white rounded-xl p-6 sm:p-8 shadow-2xl max-w-xs w-full mx-4">
+                        <div className="flex flex-col items-center">
+                          {/* Spinner */}
+                          <div className="relative w-16 h-16 mb-4">
+                            <div className="absolute inset-0 border-4 border-blue-200 rounded-full"></div>
+                            <div className="absolute inset-0 border-4 border-blue-600 rounded-full border-t-transparent animate-spin"></div>
+                          </div>
+                          <p className="text-lg font-semibold text-gray-900 mb-1">Processing...</p>
+                          <p className="text-sm text-gray-600 text-center">Sending image to API for scanning</p>
+                        </div>
+                      </div>
                     </div>
                   )}
 
