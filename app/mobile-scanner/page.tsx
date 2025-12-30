@@ -744,7 +744,7 @@ export default function MobileScanner() {
       const formData = new FormData();
       formData.append('image', imageBlob, 'boarding-pass.jpg');
       
-      const response = await fetch('http://svdrtsw02:2569/api/BoardingPass/scan', {
+      const response = await fetch('http://exit.runasp.net/api/BoardingPass/scan', {
         method: 'POST',
         body: formData,
         // Note: For localhost with self-signed cert, browser may block the request
