@@ -757,11 +757,21 @@ export default function MobileScanner() {
       const formData = new FormData();
       formData.append('image', imageBlob, 'boarding-pass.jpg');
       
-      const response = await fetch('http://exit.runasp.net/api/BoardingPass/scan', {
+      const apiUrl = 'http://exit.runasp.net/api/BoardingPass/scan';
+      console.log('🌐 Making API request to:', apiUrl, {
+        method: 'POST',
+        imageSize: imageBlob.size,
+        imageType: imageBlob.type,
+        timestamp: new Date().toISOString()
+      });
+      
+      const response = await fetch(apiUrl, {
         method: 'POST',
         body: formData,
         // Note: CORS must be enabled on the API server
       });
+      
+      console.log('📡 API response status:', response.status, response.statusText);
       
       if (!response.ok) {
         const errorText = await response.text();
@@ -836,7 +846,20 @@ export default function MobileScanner() {
         
         try {
           // Send to API
+          console.log('📤 Sending image to API for scanning...', {
+            blobSize: blob.size,
+            blobType: blob.type,
+            timestamp: new Date().toISOString()
+          });
+          
           const apiResult = await scanBoardingPassAPI(blob);
+          
+          console.log('📥 API response received:', {
+            success: apiResult.success,
+            hasDecodedText: !!apiResult.decodedText,
+            scanType: apiResult.scanType,
+            timestamp: new Date().toISOString()
+          });
           
           if (apiResult.success && apiResult.decodedText) {
             console.log('API scan result:', apiResult);
