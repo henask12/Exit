@@ -23,6 +23,8 @@ export default function MobileScanner() {
   const streamRef = useRef<MediaStream | null>(null);
   const selectedDeviceIdRef = useRef<string | undefined>(undefined);
   const ocrFallbackTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const apiScanIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const isProcessingScanRef = useRef<boolean>(false);
   
   // Initialize ZXing BarcodeReader with support for 2D barcodes and PDF417
   // Note: PDF417 requires BigInt support in the browser (available in modern browsers)
@@ -61,6 +63,11 @@ export default function MobileScanner() {
     
     return () => {
       // Cleanup on unmount
+      if (apiScanIntervalRef.current) {
+        clearInterval(apiScanIntervalRef.current);
+        apiScanIntervalRef.current = null;
+      }
+      
       if (ocrFallbackTimerRef.current) {
         clearTimeout(ocrFallbackTimerRef.current);
         ocrFallbackTimerRef.current = null;
@@ -198,10 +205,10 @@ export default function MobileScanner() {
     await startCamera();
   };
 
-  // Start scanning boarding pass barcodes - using ZXing (matching the example)
+  // Start scanning boarding pass barcodes - using API
   const startBoardingPassScanning = () => {
-    if (!codeReaderRef.current || !videoRef.current) {
-      console.log('Cannot start scanning - missing reader or video');
+    if (!videoRef.current) {
+      console.log('Cannot start scanning - missing video element');
       return;
     }
     
@@ -210,104 +217,127 @@ export default function MobileScanner() {
       return;
     }
     
-    // Ensure video element has an ID (required by ZXing)
-    if (!videoRef.current.id) {
-      videoRef.current.id = 'scanner-video';
-    }
-    
     scanningActiveRef.current = true;
     addNotification('info', 'Scanning started', 'Looking for boarding pass barcodes...');
     
-    // Use ZXing's decodeFromVideoDevice - matches the working example
-    // Note: second parameter is video element ID (string), not the element itself
-    try {
-      // Ensure video element is ready
-      if (!videoRef.current) {
-        throw new Error('Video element not available');
+    // Periodically capture frames and send to API
+    const scanInterval = setInterval(async () => {
+      if (!scanningActiveRef.current || !videoRef.current || isProcessingScanRef.current || scanResult) {
+        return;
       }
       
-      const videoElementId = videoRef.current.id || 'scanner-video';
-      if (!videoRef.current.id) {
-        videoRef.current.id = videoElementId;
+      // Check if video is ready
+      if (videoRef.current.readyState !== videoRef.current.HAVE_ENOUGH_DATA) {
+        return;
       }
       
-      console.log('Starting ZXing decode from video device:', selectedDeviceIdRef.current || 'default');
+      isProcessingScanRef.current = true;
       
-      // decodeFromVideoDevice returns a Promise that resolves when scanning stops
-      codeReaderRef.current.decodeFromVideoDevice(
-        selectedDeviceIdRef.current || undefined, // Use selected device or undefined for default
-        videoElementId, // Video element ID (string) - required by ZXing
-        (result, error) => {
-          if (result) {
-            // Result has .text property (as shown in ZXing example)
-            const barcodeText = (result as any).text;
-            const format = (result as any).getBarcodeFormat?.() || (result as any).format || 'unknown';
-            console.log('Barcode detected:', { text: barcodeText, format });
+      try {
+        // Create canvas to capture current frame
+        const canvas = document.createElement('canvas');
+        canvas.width = videoRef.current.videoWidth;
+        canvas.height = videoRef.current.videoHeight;
+        const ctx = canvas.getContext('2d');
+        
+        if (!ctx) {
+          isProcessingScanRef.current = false;
+          return;
+        }
+        
+        // Draw current video frame to canvas
+        ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
+        
+        // Convert canvas to blob
+        canvas.toBlob(async (blob) => {
+          isProcessingScanRef.current = false;
+          
+          if (!blob || !scanningActiveRef.current) {
+            return;
+          }
+          
+          try {
+            // Send to API
+            const apiResult = await scanBoardingPassAPI(blob);
             
-            if (barcodeText && scanningActiveRef.current) {
+            if (apiResult.success && apiResult.decodedText && scanningActiveRef.current) {
+              console.log('API scan result:', apiResult);
+              const scanType = apiResult.scanType || 'Barcode';
+              const decodedText = apiResult.decodedText;
+              
+              // Stop scanning
               scanningActiveRef.current = false;
-              (codeReaderRef.current as any)?.reset();
-              handleBoardingPassDetected(barcodeText);
+              if (apiScanIntervalRef.current) {
+                clearInterval(apiScanIntervalRef.current);
+                apiScanIntervalRef.current = null;
+              }
+              
+              // Parse the decoded text
+              const boardingPassData = parseBoardingPass(decodedText);
+              
+              // Create scan result
+              const scanData = {
+                id: Date.now().toString(),
+                success: true,
+                source: scanType,
+                boardingPass: boardingPassData,
+                scanTime: new Date().toLocaleTimeString(),
+                scanDate: new Date().toLocaleDateString(),
+                barcodeText: decodedText,
+                barcodeFormat: apiResult.barcodeFormat,
+                ocrConfidence: apiResult.ocrConfidence,
+                timestamp: new Date().toISOString()
+              };
+              
+              // Add to recent scans
+              setRecentScans(prev => [scanData, ...prev].slice(0, 10));
+              
+              // Display result
+              setScanResult(scanData);
+              
+              addNotification('success', `${scanType} scan successful!`, `Detected: ${boardingPassData.passengerName || boardingPassData.flightNumber || 'Boarding pass'}`);
+              
+              // Resume scanning after 3 seconds
+              setTimeout(() => {
+                setScanResult(null);
+                if (streamRef.current && isScanning && videoRef.current) {
+                  addNotification('info', 'Resuming scan...', 'Ready to scan next boarding pass');
+                  startBoardingPassScanning();
+                }
+              }, 3000);
             }
+          } catch (apiError) {
+            // Silently fail - don't spam notifications for continuous scanning
+            console.log('API scan attempt failed (normal during continuous scanning):', apiError);
           }
-          if (error) {
-            // Check if it's NotFoundException (expected when no barcode found)
-            // Based on ZXing example: ignore NotFoundException as it's normal
-            if (error instanceof NotFoundException) {
-              // This is normal - no barcode found yet, continue scanning
-              return;
-            }
-            // Log other errors but don't stop scanning unless it's a critical error
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            if (errorMessage.includes('No MultiFormat Readers')) {
-              console.error('ZXing configuration error - readers not initialized:', error);
-              addNotification('error', 'Scanner Error', 'Barcode reader not properly initialized. Please refresh the page.');
-              scanningActiveRef.current = false;
-            } else {
-              console.warn('ZXing decode warning:', error);
-            }
-          }
-        }
-      ).catch((err) => {
-        console.error('Error in decodeFromVideoDevice:', err);
-        scanningActiveRef.current = false;
-        const errorMessage = err instanceof Error ? err.message : String(err);
-        if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-          setCameraPermission('denied');
-          setShowPermissionPrompt(true);
-        } else {
-          addNotification('error', 'Scanning error', `Failed to start scanner: ${errorMessage}`);
-        }
-      });
-      
-      console.log(`Started continuous decode from camera with id ${selectedDeviceIdRef.current || 'default'}`);
-      
-      // Set OCR fallback timer (if no barcode detected in 10 seconds, suggest OCR)
-      if (ocrFallbackTimerRef.current) {
-        clearTimeout(ocrFallbackTimerRef.current);
+        }, 'image/jpeg', 0.9);
+        
+      } catch (error) {
+        isProcessingScanRef.current = false;
+        console.error('Error capturing frame:', error);
       }
-      ocrFallbackTimerRef.current = setTimeout(() => {
-        if (scanningActiveRef.current && !scanResult) {
-          addNotification('info', 'Barcode not detected', 'Try capturing an image for OCR text extraction if barcode is not readable');
-        }
-      }, 10000); // 10 seconds
-    } catch (error) {
-      console.error('Error starting ZXing scanner:', error);
-      scanningActiveRef.current = false;
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      addNotification('error', 'Scanning error', `Failed to start scanner: ${errorMessage}`);
-    }
+    }, 2000); // Scan every 2 seconds
+    
+    apiScanIntervalRef.current = scanInterval;
   };
   
   // Stop scanning
   const stopScanning = () => {
     scanningActiveRef.current = false;
     
+    // Clear API scan interval
+    if (apiScanIntervalRef.current) {
+      clearInterval(apiScanIntervalRef.current);
+      apiScanIntervalRef.current = null;
+    }
+    
     // Clear OCR fallback timer
     if (ocrFallbackTimerRef.current) {
       clearTimeout(ocrFallbackTimerRef.current);
       ocrFallbackTimerRef.current = null;
     }
+    
+    isProcessingScanRef.current = false;
     
     if (codeReaderRef.current) {
       try {
@@ -476,11 +506,11 @@ export default function MobileScanner() {
     return extracted;
   };
 
-  // Parse boarding pass barcode data (IATA format)
+  // Parse boarding pass barcode data (IATA BCBP format)
   const parseBoardingPass = (barcodeText: string) => {
-    // Boarding pass barcodes typically follow IATA format
-    // Format: M1LASTNAME/FIRSTNAME MIDDLE E1234567890 1A 15F 0123 1234567890123 1
-    // Or simpler formats with encoded data
+    // IATA BCBP (Bar Coded Boarding Pass) format
+    // Example: M2SAMUEL/ALERU MS     ESLPQOZ NDJADDET 0938 344Y011A0001...
+    // Format structure: M[format code][name] [PNR] [origin][dest][airline][flight] [date][class][seat][sequence]...
     
     const parsed: any = {
       raw: barcodeText,
@@ -492,64 +522,111 @@ export default function MobileScanner() {
       class: '',
       sequence: '',
       airline: '',
+      origin: '',
+      destination: '',
       parseErrors: [] as string[]
     };
     
     try {
-      // Try to parse IATA format
-      // Common pattern: Name/First E1234567890 Flight Seat Date PNR
-      const parts = barcodeText.split(' ');
+      // Remove format code (M1, M2, etc.) if present
+      let text = barcodeText.replace(/^M[0-9]/, '');
       
-      // Look for name pattern (LASTNAME/FIRSTNAME)
-      const nameMatch = barcodeText.match(/([A-Z]+\/[A-Z]+)/);
+      // Extract passenger name - format: LASTNAME/FIRSTNAME MS/MR
+      // Example: SAMUEL/ALERU MS
+      const nameMatch = text.match(/([A-Z]{2,}\/[A-Z]{2,}(?:\s+[A-Z]+)?(?:\s+(?:MS|MR|MRS|MISS))?)/);
       if (nameMatch) {
-        const nameParts = nameMatch[1].split('/');
-        parsed.passengerName = `${nameParts[1]} ${nameParts[0]}`;
+        const namePart = nameMatch[1].trim();
+        const nameWithoutTitle = namePart.replace(/\s+(MS|MR|MRS|MISS)$/, '');
+        if (nameWithoutTitle.includes('/')) {
+          const [last, first] = nameWithoutTitle.split('/');
+          parsed.passengerName = `${first.trim()} ${last.trim()}`;
+        } else {
+          parsed.passengerName = nameWithoutTitle;
+        }
+        // Remove name from text for further parsing
+        text = text.substring(nameMatch.index! + nameMatch[0].length).trim();
       }
       
-      // Look for flight number pattern (e.g., EK123, AA456)
-      const flightMatch = barcodeText.match(/([A-Z]{2,3}\d{3,4})/);
-      if (flightMatch) {
-        parsed.flightNumber = flightMatch[1];
-        parsed.airline = flightMatch[1].substring(0, 2);
-      }
+      // Extract PNR (Booking Code) - 6 alphanumeric characters
+      // Usually appears early in the string after name, may have E prefix
+      // Example from API: ESLPQOZ or SLPQOZ
+      const pnrPatterns = [
+        /E([A-Z0-9]{6})\s/, // E prefix followed by 6 chars and space (like ESLPQOZ )
+        /\b([A-Z]{6})\b/, // Any 6-char uppercase letters (like SLPQOZ)
+        /\b([A-Z0-9]{6})\b/, // Any 6-char alphanumeric
+      ];
       
-      // Look for seat pattern (e.g., 15F, 32A)
-      const seatMatch = barcodeText.match(/(\d{1,2}[A-Z])/);
-      if (seatMatch) {
-        parsed.seat = seatMatch[1];
-      }
-      
-      // Look for date pattern (YYMMDD or MMDDYY)
-      const dateMatch = barcodeText.match(/(\d{6})/);
-      if (dateMatch) {
-        const dateStr = dateMatch[1];
-        // Try to parse as YYMMDD
-        if (dateStr.length === 6) {
-          const year = '20' + dateStr.substring(0, 2);
-          const month = dateStr.substring(2, 4);
-          const day = dateStr.substring(4, 6);
-          parsed.date = `${year}-${month}-${day}`;
+      for (const pattern of pnrPatterns) {
+        const pnrMatch = text.match(pattern);
+        if (pnrMatch) {
+          const pnr = pnrMatch[1];
+          // Validate it's not a flight number pattern and is valid PNR format
+          if (!pnr.match(/^[A-Z]{2}\d{4}$/) && pnr.length === 6 && /^[A-Z0-9]+$/.test(pnr)) {
+            parsed.pnr = pnr;
+            break;
+          }
         }
       }
       
-      // Look for PNR (6 alphanumeric characters)
-      const pnrMatch = barcodeText.match(/([A-Z0-9]{6})/);
-      if (pnrMatch && pnrMatch[1].length === 6) {
-        parsed.pnr = pnrMatch[1];
+      // Extract flight segments - format: [origin][dest][airline][flight] [date][class][seat][sequence]
+      // Example from API: NDJADDET 0938 344Y011A0001
+      // Or: ADDFRAET 0706 345Y021A0001
+      // Pattern: 3-letter origin, 3-letter dest, 2-letter airline, space, 3-4 digit flight, space, 3-digit julian date, class, seat (1-3 digits + letter), 4-digit sequence
+      const flightSegmentPattern = /([A-Z]{3})([A-Z]{3})([A-Z]{2})\s+(\d{3,4})\s+(\d{3})([YJFC])(\d{1,3})([A-Z])(\d{4})/g;
+      const flightSegments: any[] = [];
+      let match;
+      
+      while ((match = flightSegmentPattern.exec(text)) !== null) {
+        const segment = {
+          origin: match[1],
+          destination: match[2],
+          airline: match[3],
+          flightNumber: match[3] + match[4],
+          date: match[5], // Julian date (day of year)
+          class: match[6],
+          seat: match[7] + match[8],
+          sequence: match[9]
+        };
+        flightSegments.push(segment);
       }
       
-      // If we can't parse structured data, try to extract any readable info
-      if (!parsed.passengerName && !parsed.flightNumber) {
-        // Try to find any text that looks like a name or flight
-        const textParts = barcodeText.split(/[\s\/]+/);
-        textParts.forEach((part: string) => {
-          if (part.length > 2 && part.length < 20 && /^[A-Z]+$/.test(part)) {
-            if (!parsed.passengerName) {
-              parsed.passengerName = part;
-            }
-          }
-        });
+      // Use first flight segment as primary
+      if (flightSegments.length > 0) {
+        const primary = flightSegments[0];
+        parsed.flightNumber = primary.flightNumber;
+        parsed.airline = primary.airline;
+        parsed.seat = primary.seat;
+        parsed.class = primary.class;
+        parsed.sequence = primary.sequence;
+        parsed.origin = primary.origin;
+        parsed.destination = primary.destination;
+        parsed.date = primary.date; // Julian date format
+        
+        // Convert Julian date to readable format if possible
+        // Format: 344 = day 344 of year
+        if (primary.date && primary.date.length === 3) {
+          const dayOfYear = parseInt(primary.date);
+          // Approximate conversion (would need year context for exact date)
+          parsed.date = `Day ${dayOfYear}`;
+        }
+      }
+      
+      // If no structured flight segment found, try simpler patterns
+      if (!parsed.flightNumber) {
+        // Look for flight number pattern (e.g., ET938, ET706)
+        const flightMatch = text.match(/\b([A-Z]{2})(\d{3,4})\b/);
+        if (flightMatch) {
+          parsed.flightNumber = flightMatch[1] + flightMatch[2];
+          parsed.airline = flightMatch[1];
+        }
+      }
+      
+      if (!parsed.seat) {
+        // Look for seat pattern (e.g., 11A, 21A)
+        const seatMatch = text.match(/\b(\d{1,2})([A-Z])\b/);
+        if (seatMatch) {
+          parsed.seat = seatMatch[1] + seatMatch[2];
+        }
       }
       
       // Check if we successfully parsed any meaningful data
@@ -557,6 +634,8 @@ export default function MobileScanner() {
       if (!hasData) {
         parsed.parseErrors.push('Could not extract passenger name, flight number, seat, or PNR from barcode');
       }
+      
+      console.log('Parsed boarding pass data:', parsed);
       
     } catch (error: any) {
       console.error('Error parsing boarding pass:', error);
@@ -612,9 +691,36 @@ export default function MobileScanner() {
   };
 
 
-  // Capture and scan from image (fallback method) - using ZXing, then OCR
+  // Send image to API for scanning
+  const scanBoardingPassAPI = async (imageBlob: Blob): Promise<any> => {
+    try {
+      const formData = new FormData();
+      formData.append('image', imageBlob, 'boarding-pass.jpg');
+      
+      const response = await fetch('https://localhost:7283/api/BoardingPass/scan', {
+        method: 'POST',
+        body: formData,
+        // Note: For localhost with self-signed cert, browser may block the request
+        // In production, use proper SSL certificate or handle CORS appropriately
+      });
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`API error: ${response.status} ${response.statusText} - ${errorText}`);
+      }
+      
+      const data = await response.json();
+      return data;
+    } catch (error) {
+      console.error('API scan error:', error);
+      // Re-throw to let caller handle
+      throw error;
+    }
+  };
+
+  // Capture and scan from image - using API
   const captureAndScan = async () => {
-    if (!codeReaderRef.current || !videoRef.current) {
+    if (!videoRef.current) {
       addNotification('error', 'Camera not ready', 'Please ensure camera is started before capturing');
       return;
     }
@@ -624,7 +730,7 @@ export default function MobileScanner() {
     stopScanning();
     
     try {
-      addNotification('info', 'Capturing...', 'Analyzing captured image...');
+      addNotification('info', 'Capturing...', 'Sending image to API for scanning...');
       
       // Create canvas to capture current frame
       const canvas = document.createElement('canvas');
@@ -640,52 +746,84 @@ export default function MobileScanner() {
       // Draw current video frame to canvas
       ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
       
-      // Try barcode scanning first
-      try {
-        const result = await codeReaderRef.current.decodeFromCanvas(canvas);
+      // Convert canvas to blob
+      canvas.toBlob(async (blob) => {
+        if (!blob) {
+          addNotification('error', 'Capture failed', 'Could not convert image to blob');
+          // Resume scanning if it was active
+          if (wasScanning && videoRef.current) {
+            setTimeout(() => {
+              startBoardingPassScanning();
+            }, 500);
+          }
+          return;
+        }
         
-        if (result) {
-          const barcodeText = (result as any).text || result.getText?.();
-          if (barcodeText) {
-            console.log('Barcode detected from capture:', barcodeText);
-            handleBoardingPassDetected(barcodeText);
-            return;
+        try {
+          // Send to API
+          const apiResult = await scanBoardingPassAPI(blob);
+          
+          if (apiResult.success && apiResult.decodedText) {
+            console.log('API scan result:', apiResult);
+            const scanType = apiResult.scanType || 'Barcode';
+            const decodedText = apiResult.decodedText;
+            
+            // Parse the decoded text
+            const boardingPassData = parseBoardingPass(decodedText);
+            
+            // Create scan result
+            const scanData = {
+              id: Date.now().toString(),
+              success: true,
+              source: scanType,
+              boardingPass: boardingPassData,
+              scanTime: new Date().toLocaleTimeString(),
+              scanDate: new Date().toLocaleDateString(),
+              barcodeText: decodedText,
+              barcodeFormat: apiResult.barcodeFormat,
+              ocrConfidence: apiResult.ocrConfidence,
+              timestamp: new Date().toISOString()
+            };
+            
+            // Add to recent scans
+            setRecentScans(prev => [scanData, ...prev].slice(0, 10));
+            
+            // Display result
+            setScanResult(scanData);
+            
+            addNotification('success', `${scanType} scan successful!`, `Detected: ${boardingPassData.passengerName || boardingPassData.flightNumber || 'Boarding pass'}`);
+            
+            // Resume scanning after 3 seconds
+            setTimeout(() => {
+              setScanResult(null);
+              if (streamRef.current && isScanning && videoRef.current) {
+                addNotification('info', 'Resuming scan...', 'Ready to scan next boarding pass');
+                startBoardingPassScanning();
+              }
+            }, 3000);
+          } else {
+            addNotification('warning', 'Scan failed', apiResult.error || 'Could not decode boarding pass');
+            // Resume scanning if it was active
+            if (wasScanning && videoRef.current) {
+              setTimeout(() => {
+                startBoardingPassScanning();
+              }, 500);
+            }
+          }
+        } catch (apiError) {
+          console.error('API scan error:', apiError);
+          const errorMessage = apiError instanceof Error ? apiError.message : String(apiError);
+          addNotification('error', 'API Error', `Failed to scan: ${errorMessage}`);
+          
+          // Resume scanning if it was active
+          if (wasScanning && videoRef.current) {
+            setTimeout(() => {
+              startBoardingPassScanning();
+            }, 500);
           }
         }
-      } catch (barcodeError) {
-        console.log('Barcode scan failed, trying OCR...', barcodeError);
-      }
+      }, 'image/jpeg', 0.9);
       
-      // If barcode failed, try OCR
-      addNotification('info', 'Barcode not found', 'Trying OCR text extraction...');
-      const ocrText = await performOCR(canvas);
-      
-      if (ocrText) {
-        // Extract structured data from OCR text
-        const extractedData = extractBoardingPassFromOCR(ocrText);
-        
-        // If we found meaningful data, process it
-        if (extractedData.passengerName || extractedData.flightNumber) {
-          console.log('OCR extracted boarding pass data:', extractedData);
-          
-          // Use OCR text as the "barcode text" for processing
-          handleBoardingPassDetected(ocrText, extractedData);
-          return;
-        } else {
-          // OCR found text but couldn't extract structured data
-          console.log('OCR extracted text but no structured data:', ocrText);
-          addNotification('warning', 'Limited OCR data', 'Extracted text but could not identify passenger or flight information');
-        }
-      }
-      
-      addNotification('warning', 'No data found', 'Could not detect barcode or extract meaningful text. Please ensure the boarding pass is clearly visible.');
-      
-      // Resume continuous scanning if it was active
-      if (wasScanning && videoRef.current) {
-        setTimeout(() => {
-          startBoardingPassScanning();
-        }, 500);
-      }
     } catch (error) {
       console.error('Error capturing and scanning:', error);
       const errorMessage = error instanceof Error ? error.message : String(error);
