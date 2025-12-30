@@ -26,6 +26,7 @@ export default function MobileScanner() {
   const ocrFallbackTimerRef = useRef<NodeJS.Timeout | null>(null);
   const apiScanIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const isProcessingScanRef = useRef<boolean>(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   
   // Initialize ZXing BarcodeReader with support for 2D barcodes and PDF417
   // Note: PDF417 requires BigInt support in the browser (available in modern browsers)
@@ -805,6 +806,128 @@ export default function MobileScanner() {
     }
   };
 
+  // Save image to gallery
+  const saveImageToGallery = async (blob: Blob, filename: string = 'boarding-pass.jpg') => {
+    try {
+      // Try using File System Access API (Chrome/Edge)
+      if ('showSaveFilePicker' in window) {
+        try {
+          const fileHandle = await (window as any).showSaveFilePicker({
+            suggestedName: filename,
+            types: [{
+              description: 'JPEG Image',
+              accept: { 'image/jpeg': ['.jpg', '.jpeg'] }
+            }]
+          });
+          
+          const writable = await fileHandle.createWritable();
+          await writable.write(blob);
+          await writable.close();
+          
+          addNotification('success', 'Image saved', 'Image saved to your device');
+          return true;
+        } catch (saveError: any) {
+          // User cancelled or error occurred, fall through to download method
+          if (saveError.name !== 'AbortError') {
+            console.log('File System Access API failed, using download method:', saveError);
+          }
+        }
+      }
+      
+      // Fallback: Download method (works on all browsers)
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      link.style.display = 'none';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      
+      // Clean up the URL after a delay
+      setTimeout(() => {
+        URL.revokeObjectURL(url);
+      }, 100);
+      
+      addNotification('success', 'Image saved', 'Image downloaded to your device');
+      return true;
+    } catch (error) {
+      console.error('Error saving image:', error);
+      addNotification('error', 'Save failed', 'Could not save image to gallery');
+      return false;
+    }
+  };
+
+  // Handle native camera capture
+  const handleNativeCameraCapture = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+    
+    // Reset input
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+    
+    try {
+      addNotification('info', 'Processing image...', 'Sending to API for scanning...');
+      
+      // Convert file to blob
+      const blob = await file.arrayBuffer().then(buffer => new Blob([buffer], { type: file.type }));
+      
+      // Save image to gallery first
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      await saveImageToGallery(blob, `boarding-pass-${timestamp}.jpg`);
+      
+      // Send to API for scanning
+      const apiResult = await scanBoardingPassAPI(blob);
+      
+      if (apiResult.success && apiResult.decodedText) {
+        const scanType = apiResult.scanType || 'Barcode';
+        const decodedText = apiResult.decodedText;
+        
+        // Parse the decoded text
+        const boardingPassData = parseBoardingPass(decodedText);
+        
+        // Create scan result
+        const scanData = {
+          id: Date.now().toString(),
+          success: true,
+          source: scanType,
+          boardingPass: boardingPassData,
+          scanTime: new Date().toLocaleTimeString(),
+          scanDate: new Date().toLocaleDateString(),
+          barcodeText: decodedText,
+          barcodeFormat: apiResult.barcodeFormat,
+          ocrConfidence: apiResult.ocrConfidence,
+          timestamp: new Date().toISOString()
+        };
+        
+        // Add to recent scans
+        setRecentScans(prev => [scanData, ...prev].slice(0, 10));
+        
+        // Display result
+        setScanResult(scanData);
+        
+        addNotification('success', `${scanType} scan successful!`, `Detected: ${boardingPassData.passengerName || boardingPassData.flightNumber || 'Boarding pass'}`);
+      } else {
+        addNotification('warning', 'Scan failed', apiResult.error || 'Could not decode boarding pass');
+      }
+    } catch (error) {
+      console.error('Error processing native camera image:', error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      addNotification('error', 'Processing failed', `Error: ${errorMessage}`);
+    }
+  };
+
+  // Open native camera
+  const openNativeCamera = () => {
+    if (fileInputRef.current) {
+      fileInputRef.current.click();
+    }
+  };
+
   // Capture and scan from image - using API
   const captureAndScan = async () => {
     if (!videoRef.current) {
@@ -840,6 +963,9 @@ export default function MobileScanner() {
         }
         
         try {
+          // Save image to gallery
+          const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+          await saveImageToGallery(blob, `boarding-pass-${timestamp}.jpg`);
           
           // Send to API
           console.log('📤 Sending image to API for scanning...', {
@@ -1110,6 +1236,16 @@ export default function MobileScanner() {
                 </div>
               )}
 
+              {/* Hidden file input for native camera */}
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                className="hidden"
+                onChange={handleNativeCameraCapture}
+              />
+
               {/* Camera Scanner Frame - using ZXing */}
               <div className="relative mb-4 sm:mb-6">
                 <div className="bg-gray-900 rounded-lg overflow-hidden aspect-square flex items-center justify-center relative min-h-[250px] sm:min-h-[300px] md:min-h-[400px]">
@@ -1166,20 +1302,34 @@ export default function MobileScanner() {
 
                 </div>
                 
-                {/* Floating Camera Button - Only to start camera */}
+                {/* Button Group - Native Camera and Web Camera */}
                 {!isScanning && !scanResult && (
-                  <button
-                    onClick={() => {
-                      startCamera();
-                    }}
-                    className="absolute -bottom-4 sm:-bottom-6 left-1/2 transform -translate-x-1/2 w-12 h-12 sm:w-14 sm:h-14 bg-blue-600 rounded-full flex items-center justify-center shadow-lg hover:bg-blue-700 active:bg-blue-800 transition-colors z-10 touch-manipulation"
-                    title="Start Camera"
-                  >
-                    <svg className="w-5 h-5 sm:w-6 sm:h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 001.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
-                    </svg>
-                  </button>
+                  <div className="absolute -bottom-4 sm:-bottom-6 left-1/2 transform -translate-x-1/2 flex items-center gap-3 z-10">
+                    {/* Native Camera Button */}
+                    <button
+                      onClick={openNativeCamera}
+                      className="w-12 h-12 sm:w-14 sm:h-14 bg-purple-600 rounded-full flex items-center justify-center shadow-lg hover:bg-purple-700 active:bg-purple-800 transition-colors touch-manipulation"
+                      title="Open Native Camera"
+                    >
+                      <svg className="w-5 h-5 sm:w-6 sm:h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 001.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
+                      </svg>
+                    </button>
+                    
+                    {/* Web Camera Button */}
+                    <button
+                      onClick={() => {
+                        startCamera();
+                      }}
+                      className="w-12 h-12 sm:w-14 sm:h-14 bg-blue-600 rounded-full flex items-center justify-center shadow-lg hover:bg-blue-700 active:bg-blue-800 transition-colors touch-manipulation"
+                      title="Start Web Camera"
+                    >
+                      <svg className="w-5 h-5 sm:w-6 sm:h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                      </svg>
+                    </button>
+                  </div>
                 )}
                 
                 {/* Capture & Scan Button - Fallback when camera is active */}
@@ -1274,7 +1424,11 @@ export default function MobileScanner() {
 
               {/* Instructions */}
               <div className="text-center text-sm text-gray-600 space-y-1 mt-4">
-                <p>{isScanning ? 'Point camera at boarding pass barcode and tap the green button to capture & scan' : 'Tap the camera button to start'}</p>
+                <p>
+                  {isScanning 
+                    ? 'Point camera at boarding pass barcode and tap the green button to capture & scan' 
+                    : 'Tap the purple button for native camera or blue button for web camera'}
+                </p>
               </div>
             </>
           )}
