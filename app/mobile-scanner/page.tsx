@@ -228,7 +228,7 @@ export default function MobileScanner() {
       }
       
       setIsScanning(true);
-      addNotification('success', 'Camera started', 'Camera is ready. Tap the capture button to scan.');
+      // addNotification('success', 'Camera started', 'Camera is ready. Tap the capture button to scan.');
       
     } catch (error: any) {
       console.error('Error starting camera:', error);
@@ -889,7 +889,7 @@ export default function MobileScanner() {
     stopScanning();
     
     try {
-      addNotification('info', 'Capturing...', 'Sending image to API for scanning...');
+      // addNotification('info', 'Capturing...', 'Sending image to API for scanning...');
       
       // Create canvas to capture current frame
       const canvas = document.createElement('canvas');
@@ -963,18 +963,18 @@ export default function MobileScanner() {
             setTimeout(() => {
               setScanResult(null);
               // Resume camera scanning if still active
-              if (streamRef.current && isScanning && videoRef.current) {
-                addNotification('info', 'Ready for next scan', 'Camera ready to capture again');
-              }
-            }, 2000);
+              // if (streamRef.current && isScanning && videoRef.current) {
+              //   addNotification('info', 'Ready for next scan', 'Camera ready to capture again');
+              // }
+            }, 100);
           } else {
             addNotification('warning', 'Scan failed', apiResult.error || 'Could not decode boarding pass');
             // Still ready for next capture even on failure
             setTimeout(() => {
-              if (streamRef.current && isScanning && videoRef.current) {
-                addNotification('info', 'Ready for next scan', 'Camera ready to capture again');
-              }
-            }, 2000);
+              // if (streamRef.current && isScanning && videoRef.current) {
+              //   addNotification('info', 'Ready for next scan', 'Camera ready to capture again');
+              // }
+            }, 100);
           }
         } catch (apiError) {
           console.error('API scan error:', apiError);
@@ -982,10 +982,10 @@ export default function MobileScanner() {
           addNotification('error', 'API Error', `Failed to scan: ${errorMessage}`);
           // Still ready for next capture even on error
           setTimeout(() => {
-            if (streamRef.current && isScanning && videoRef.current) {
-              addNotification('info', 'Ready for next scan', 'Camera ready to capture again');
-            }
-          }, 2000);
+              // if (streamRef.current && isScanning && videoRef.current) {
+              //   addNotification('info', 'Ready for next scan', 'Camera ready to capture again');
+              // }
+          }, 100);
         }
       }, 'image/jpeg', 0.9);
       
