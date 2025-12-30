@@ -376,7 +376,7 @@ export default function MobileScanner() {
         isProcessingScanRef.current = false;
         console.error('Error capturing frame:', error);
       }
-    }, 2000); // Scan every 2 seconds
+    }, 1000); // Scan every 2 seconds
     
     apiScanIntervalRef.current = scanInterval;
   };
@@ -860,7 +860,7 @@ export default function MobileScanner() {
         setTimeout(() => {
           setScanResult(null);
           addNotification('info', 'Ready for next scan', 'Camera ready to capture again');
-        }, 2000);
+        }, 1000);
       } else {
         addNotification('warning', 'Scan failed', apiResult.error || 'Could not decode boarding pass');
       }
