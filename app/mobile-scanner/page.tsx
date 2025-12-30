@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect } from 'react';
 import Header from '../components/Header';
 import { BrowserMultiFormatReader } from '@zxing/browser';
+import { NotFoundException, DecodeHintType, BarcodeFormat } from '@zxing/library';
 
 // Sample flights data
 const flights = [
@@ -330,13 +331,42 @@ export default function MobileScanner() {
   const codeReaderRef = useRef<BrowserMultiFormatReader | null>(null);
   const scanningActiveRef = useRef<boolean>(false);
   const streamRef = useRef<MediaStream | null>(null);
+  const selectedDeviceIdRef = useRef<string | undefined>(undefined);
   
-  // Initialize ZXing BarcodeReader
+  // Initialize ZXing BarcodeReader with support for 2D barcodes and PDF417
+  // Note: PDF417 requires BigInt support in the browser (available in modern browsers)
+  // BrowserMultiFormatReader supports all formats by default, including PDF417 and 2D barcodes
   useEffect(() => {
-    if (!codeReaderRef.current) {
-      codeReaderRef.current = new BrowserMultiFormatReader();
-      console.log('ZXing barcode reader initialized');
-    }
+    const initZXing = async () => {
+      if (!codeReaderRef.current) {
+        // BrowserMultiFormatReader supports all formats by default including:
+        // - 2D: QR Code, Data Matrix, Aztec, PDF417
+        // - 1D: CODE_128, CODE_39, EAN, UPC, ITF, CODABAR
+        // Using default constructor ensures all readers are properly initialized
+        codeReaderRef.current = new BrowserMultiFormatReader();
+        console.log('ZXing barcode reader initialized - supports all formats including PDF417 and 2D barcodes');
+        
+        // List available video devices and select the first one (prefer back camera)
+        // Note: listVideoInputDevices is an instance method (works in runtime, types may be wrong)
+        try {
+          const videoInputDevices = await (codeReaderRef.current as any).listVideoInputDevices();
+          if (videoInputDevices.length > 0) {
+            // Prefer back camera (environment facing)
+            const backCamera = videoInputDevices.find((device: any) => 
+              device.label.toLowerCase().includes('back') || 
+              device.label.toLowerCase().includes('rear') ||
+              device.label.toLowerCase().includes('environment')
+            );
+            selectedDeviceIdRef.current = backCamera?.deviceId || videoInputDevices[0].deviceId;
+            console.log('Selected camera device:', selectedDeviceIdRef.current);
+          }
+        } catch (err) {
+          console.warn('Could not list video devices:', err);
+        }
+      }
+    };
+    
+    initZXing();
     
     return () => {
       // Cleanup on unmount
@@ -421,7 +451,7 @@ export default function MobileScanner() {
     }
   };
 
-  // Start camera - using ZXing
+  // Start camera - ZXing's decodeFromVideoDevice manages the camera stream
   const startCamera = async () => {
     try {
       if (!videoRef.current || !codeReaderRef.current) {
@@ -435,43 +465,22 @@ export default function MobileScanner() {
         return;
       }
 
-      // Request camera access
-      const constraints: MediaStreamConstraints = {
-        video: {
-          facingMode: { ideal: 'environment' }, // Prefer back camera on mobile
-        }
-      };
-
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      streamRef.current = stream;
-      
+      // Ensure video element is properly configured
       if (videoRef.current) {
-        videoRef.current.srcObject = stream;
         videoRef.current.setAttribute('playsinline', 'true');
         videoRef.current.setAttribute('webkit-playsinline', 'true');
         videoRef.current.muted = true;
-        
-        try {
-          if (videoRef.current.paused) {
-            await videoRef.current.play();
-          }
-        } catch (playError: any) {
-          if (playError.name !== 'NotAllowedError' && !playError.message?.includes('already playing')) {
-            console.error('Error playing video:', playError);
-          }
-        }
-        
-        setIsScanning(true);
-        setCameraPermission('granted');
-        setShowPermissionPrompt(false);
-        
-        // Start scanning after video is ready
-        setTimeout(() => {
-          startBoardingPassScanning();
-        }, 1000);
       }
+      
+      setIsScanning(true);
+      
+      // ZXing's decodeFromVideoDevice will handle camera access and video stream
+      // Start scanning - this will request camera permission and start the stream
+      startBoardingPassScanning();
+      
     } catch (error: any) {
-      console.error('Error accessing camera:', error);
+      console.error('Error starting camera:', error);
+      setIsScanning(false);
       
       if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
         setCameraPermission('denied');
@@ -489,10 +498,10 @@ export default function MobileScanner() {
     await startCamera();
   };
 
-  // Start scanning boarding pass barcodes - using ZXing
-  const startBoardingPassScanning = async () => {
-    if (!codeReaderRef.current || !videoRef.current || !streamRef.current) {
-      console.log('Cannot start scanning - missing reader, video, or stream');
+  // Start scanning boarding pass barcodes - using ZXing (matching the example)
+  const startBoardingPassScanning = () => {
+    if (!codeReaderRef.current || !videoRef.current) {
+      console.log('Cannot start scanning - missing reader or video');
       return;
     }
     
@@ -501,46 +510,77 @@ export default function MobileScanner() {
       return;
     }
     
-    // Wait for video to be ready
-    let retries = 0;
-    const maxRetries = 10;
-    
-    while ((videoRef.current.readyState < 2 || videoRef.current.videoWidth === 0 || videoRef.current.videoHeight === 0) && retries < maxRetries) {
-      await new Promise(resolve => setTimeout(resolve, 200));
-      retries++;
-    }
-    
-    if (videoRef.current.videoWidth === 0 || videoRef.current.videoHeight === 0) {
-      addNotification('error', 'Camera not ready', 'Video dimensions are not available. Please ensure camera is working.');
-      return;
+    // Ensure video element has an ID (required by ZXing)
+    if (!videoRef.current.id) {
+      videoRef.current.id = 'scanner-video';
     }
     
     scanningActiveRef.current = true;
     addNotification('info', 'Scanning started', 'Looking for boarding pass barcodes...');
     
-    // Use ZXing's decodeFromVideoDevice which handles continuous scanning
+    // Use ZXing's decodeFromVideoDevice - matches the working example
+    // Note: second parameter is video element ID (string), not the element itself
     try {
+      // Ensure video element is ready
+      if (!videoRef.current) {
+        throw new Error('Video element not available');
+      }
+      
+      const videoElementId = videoRef.current.id || 'scanner-video';
+      if (!videoRef.current.id) {
+        videoRef.current.id = videoElementId;
+      }
+      
+      console.log('Starting ZXing decode from video device:', selectedDeviceIdRef.current || 'default');
+      
+      // decodeFromVideoDevice returns a Promise that resolves when scanning stops
       codeReaderRef.current.decodeFromVideoDevice(
-        undefined, // Use default camera
-        videoRef.current,
+        selectedDeviceIdRef.current || undefined, // Use selected device or undefined for default
+        videoElementId, // Video element ID (string) - required by ZXing
         (result, error) => {
           if (result) {
-            const barcodeText = result.getText();
+            // Result has .text property (as shown in ZXing example)
+            const barcodeText = (result as any).text;
+            const format = (result as any).getBarcodeFormat?.() || (result as any).format || 'unknown';
+            console.log('Barcode detected:', { text: barcodeText, format });
+            
             if (barcodeText && scanningActiveRef.current) {
               scanningActiveRef.current = false;
               (codeReaderRef.current as any)?.reset();
               handleBoardingPassDetected(barcodeText);
             }
           }
-          if (error && !error.message?.includes('No barcode') && !error.message?.includes('not found')) {
-            // Only log non-common errors
-            console.error('ZXing decode error:', error);
+          if (error) {
+            // Check if it's NotFoundException (expected when no barcode found)
+            // Based on ZXing example: ignore NotFoundException as it's normal
+            if (error instanceof NotFoundException) {
+              // This is normal - no barcode found yet, continue scanning
+              return;
+            }
+            // Log other errors but don't stop scanning unless it's a critical error
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            if (errorMessage.includes('No MultiFormat Readers')) {
+              console.error('ZXing configuration error - readers not initialized:', error);
+              addNotification('error', 'Scanner Error', 'Barcode reader not properly initialized. Please refresh the page.');
+              scanningActiveRef.current = false;
+            } else {
+              console.warn('ZXing decode warning:', error);
+            }
           }
         }
       ).catch((err) => {
         console.error('Error in decodeFromVideoDevice:', err);
         scanningActiveRef.current = false;
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+          setCameraPermission('denied');
+          setShowPermissionPrompt(true);
+        } else {
+          addNotification('error', 'Scanning error', `Failed to start scanner: ${errorMessage}`);
+        }
       });
+      
+      console.log(`Started continuous decode from camera with id ${selectedDeviceIdRef.current || 'default'}`);
     } catch (error) {
       console.error('Error starting ZXing scanner:', error);
       scanningActiveRef.current = false;
@@ -1167,9 +1207,10 @@ export default function MobileScanner() {
               {/* Camera Scanner Frame - using ZXing */}
               <div className="relative mb-4 sm:mb-6">
                 <div className="bg-gray-900 rounded-lg overflow-hidden aspect-square flex items-center justify-center relative min-h-[250px] sm:min-h-[300px] md:min-h-[400px]">
-                  {/* Video element */}
+                  {/* Video element - ID required by ZXing decodeFromVideoDevice */}
                   <video
                     ref={videoRef}
+                    id="scanner-video"
                     autoPlay
                     playsInline
                     muted
