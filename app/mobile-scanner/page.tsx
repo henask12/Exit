@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from 'react';
 import Header from '../components/Header';
 import { BrowserMultiFormatReader } from '@zxing/browser';
 import { NotFoundException, DecodeHintType, BarcodeFormat } from '@zxing/library';
+import { createWorker } from 'tesseract.js';
 
 // Sample flights data
 const flights = [
@@ -332,6 +333,7 @@ export default function MobileScanner() {
   const scanningActiveRef = useRef<boolean>(false);
   const streamRef = useRef<MediaStream | null>(null);
   const selectedDeviceIdRef = useRef<string | undefined>(undefined);
+  const ocrFallbackTimerRef = useRef<NodeJS.Timeout | null>(null);
   
   // Initialize ZXing BarcodeReader with support for 2D barcodes and PDF417
   // Note: PDF417 requires BigInt support in the browser (available in modern browsers)
@@ -370,6 +372,11 @@ export default function MobileScanner() {
     
     return () => {
       // Cleanup on unmount
+      if (ocrFallbackTimerRef.current) {
+        clearTimeout(ocrFallbackTimerRef.current);
+        ocrFallbackTimerRef.current = null;
+      }
+      
       if (codeReaderRef.current) {
         try {
           (codeReaderRef.current as any).reset();
@@ -581,6 +588,16 @@ export default function MobileScanner() {
       });
       
       console.log(`Started continuous decode from camera with id ${selectedDeviceIdRef.current || 'default'}`);
+      
+      // Set OCR fallback timer (if no barcode detected in 10 seconds, suggest OCR)
+      if (ocrFallbackTimerRef.current) {
+        clearTimeout(ocrFallbackTimerRef.current);
+      }
+      ocrFallbackTimerRef.current = setTimeout(() => {
+        if (scanningActiveRef.current && !scanResult) {
+          addNotification('info', 'Barcode not detected', 'Try capturing an image for OCR text extraction if barcode is not readable');
+        }
+      }, 10000); // 10 seconds
     } catch (error) {
       console.error('Error starting ZXing scanner:', error);
       scanningActiveRef.current = false;
@@ -592,6 +609,13 @@ export default function MobileScanner() {
   // Stop scanning
   const stopScanning = () => {
     scanningActiveRef.current = false;
+    
+    // Clear OCR fallback timer
+    if (ocrFallbackTimerRef.current) {
+      clearTimeout(ocrFallbackTimerRef.current);
+      ocrFallbackTimerRef.current = null;
+    }
+    
     if (codeReaderRef.current) {
       try {
         (codeReaderRef.current as any).reset();
@@ -599,6 +623,109 @@ export default function MobileScanner() {
         // Ignore reset errors
       }
     }
+  };
+
+  // OCR helper function to extract text from boarding pass images
+  const performOCR = async (canvas: HTMLCanvasElement): Promise<string | null> => {
+    try {
+      addNotification('info', 'OCR Processing', 'Extracting text from boarding pass...');
+      
+      const worker = await createWorker('eng'); // English language
+      const { data: { text } } = await worker.recognize(canvas);
+      await worker.terminate();
+      
+      if (text && text.trim().length > 0) {
+        console.log('OCR extracted text:', text);
+        return text.trim();
+      }
+      
+      return null;
+    } catch (error) {
+      console.error('OCR error:', error);
+      addNotification('error', 'OCR Failed', 'Could not extract text from image');
+      return null;
+    }
+  };
+
+  // Extract boarding pass data from OCR text
+  const extractBoardingPassFromOCR = (ocrText: string): any => {
+    const extracted: any = {
+      raw: ocrText,
+      passengerName: '',
+      flightNumber: '',
+      date: '',
+      seat: '',
+      pnr: '',
+      class: '',
+      sequence: '',
+      airline: '',
+      source: 'OCR'
+    };
+    
+    // Extract passenger name (common patterns)
+    const namePatterns = [
+      /([A-Z]+\/[A-Z]+(?:\s+[A-Z]+)?)/, // LASTNAME/FIRSTNAME
+      /(?:PASSENGER|PAX|NAME)[:\s]+([A-Z\s\/]+)/i,
+      /^([A-Z]+\s+[A-Z]+(?:\s+[A-Z]+)?)/, // First line might be name
+      /([A-Z]{2,}\s+[A-Z]{2,})/ // Two or more capital words
+    ];
+    
+    for (const pattern of namePatterns) {
+      const match = ocrText.match(pattern);
+      if (match) {
+        const name = match[1].trim();
+        if (name.includes('/')) {
+          const [last, first] = name.split('/');
+          extracted.passengerName = `${first.trim()} ${last.trim()}`;
+        } else {
+          extracted.passengerName = name;
+        }
+        break;
+      }
+    }
+    
+    // Extract flight number (e.g., ET302, AA1234)
+    const flightMatch = ocrText.match(/([A-Z]{2,3}\s*\d{2,4})/);
+    if (flightMatch) {
+      extracted.flightNumber = flightMatch[1].replace(/\s+/g, '');
+      extracted.airline = extracted.flightNumber.substring(0, 2);
+    }
+    
+    // Extract seat (e.g., 15F, 12A)
+    const seatMatch = ocrText.match(/(\d{1,2}[A-Z])/);
+    if (seatMatch) {
+      extracted.seat = seatMatch[1];
+    }
+    
+    // Extract date
+    const datePatterns = [
+      /(\d{2}[A-Z]{3}\d{2})/, // 15JAN24
+      /(\d{4}-\d{2}-\d{2})/, // 2024-01-15
+      /(\d{2}\/\d{2}\/\d{4})/, // 01/15/2024
+      /(\d{2}\/\d{2}\/\d{2})/ // 01/15/24
+    ];
+    
+    for (const pattern of datePatterns) {
+      const match = ocrText.match(pattern);
+      if (match) {
+        extracted.date = match[1];
+        break;
+      }
+    }
+    
+    // Extract PNR (6 alphanumeric characters)
+    const pnrMatch = ocrText.match(/([A-Z0-9]{6})/);
+    if (pnrMatch) {
+      extracted.pnr = pnrMatch[1];
+    }
+    
+    // Extract class (e.g., Y, J, F)
+    const classMatch = ocrText.match(/\b([YJFC])\b/);
+    if (classMatch) {
+      extracted.class = classMatch[1];
+    }
+    
+    return extracted;
   };
 
   // Parse boarding pass barcode data (IATA format)
@@ -692,14 +819,19 @@ export default function MobileScanner() {
   };
 
   // Handle detected boarding pass barcode
-  const handleBoardingPassDetected = (barcodeText: string) => {
+  const handleBoardingPassDetected = (barcodeText: string, ocrData?: any) => {
     // Scanning is already stopped when barcode is detected
     
-    // Show notification that barcode was detected
-    addNotification('success', 'Barcode detected!', `Raw data: ${barcodeText.substring(0, 50)}${barcodeText.length > 50 ? '...' : ''}`);
+    // Determine source and show appropriate notification
+    const source = ocrData ? 'OCR' : 'Barcode';
+    if (ocrData) {
+      addNotification('success', 'Text extracted via OCR!', `Extracted text from boarding pass image`);
+    } else {
+      addNotification('success', 'Barcode detected!', `Raw data: ${barcodeText.substring(0, 50)}${barcodeText.length > 50 ? '...' : ''}`);
+    }
     
-    // Parse boarding pass data from barcode
-    const boardingPassData = parseBoardingPass(barcodeText);
+    // Parse boarding pass data - use OCR data if provided, otherwise parse from barcode
+    const boardingPassData = ocrData || parseBoardingPass(barcodeText);
     const scanTime = new Date().toLocaleTimeString();
     
     // Check for parsing errors
@@ -742,6 +874,7 @@ export default function MobileScanner() {
     // Display the scanned boarding pass details
     setScanResult({
       success: true,
+      source: source,
       boardingPass: boardingPassData,
       passenger: passenger || null,
       flight: selectedFlight,
@@ -800,9 +933,9 @@ export default function MobileScanner() {
     return passenger;
   };
 
-  // Capture and scan from image (fallback method) - using ZXing
+  // Capture and scan from image (fallback method) - using ZXing, then OCR
   const captureAndScan = async () => {
-    if (!codeReaderRef.current || !videoRef.current || !streamRef.current) {
+    if (!codeReaderRef.current || !videoRef.current) {
       addNotification('error', 'Camera not ready', 'Please ensure camera is started before capturing');
       return;
     }
@@ -812,7 +945,7 @@ export default function MobileScanner() {
     stopScanning();
     
     try {
-      addNotification('info', 'Capturing...', 'Analyzing captured image for barcode...');
+      addNotification('info', 'Capturing...', 'Analyzing captured image...');
       
       // Create canvas to capture current frame
       const canvas = document.createElement('canvas');
@@ -828,21 +961,48 @@ export default function MobileScanner() {
       // Draw current video frame to canvas
       ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
       
-      // Use ZXing to decode from canvas
-      const result = await codeReaderRef.current.decodeFromCanvas(canvas);
+      // Try barcode scanning first
+      try {
+        const result = await codeReaderRef.current.decodeFromCanvas(canvas);
+        
+        if (result) {
+          const barcodeText = (result as any).text || result.getText?.();
+          if (barcodeText) {
+            console.log('Barcode detected from capture:', barcodeText);
+            handleBoardingPassDetected(barcodeText);
+            return;
+          }
+        }
+      } catch (barcodeError) {
+        console.log('Barcode scan failed, trying OCR...', barcodeError);
+      }
       
-      if (result) {
-        const barcodeText = result.getText();
-        if (barcodeText) {
-          console.log('Barcode detected from capture:', barcodeText);
-          handleBoardingPassDetected(barcodeText);
+      // If barcode failed, try OCR
+      addNotification('info', 'Barcode not found', 'Trying OCR text extraction...');
+      const ocrText = await performOCR(canvas);
+      
+      if (ocrText) {
+        // Extract structured data from OCR text
+        const extractedData = extractBoardingPassFromOCR(ocrText);
+        
+        // If we found meaningful data, process it
+        if (extractedData.passengerName || extractedData.flightNumber) {
+          console.log('OCR extracted boarding pass data:', extractedData);
+          
+          // Use OCR text as the "barcode text" for processing
+          handleBoardingPassDetected(ocrText, extractedData);
           return;
+        } else {
+          // OCR found text but couldn't extract structured data
+          console.log('OCR extracted text but no structured data:', ocrText);
+          addNotification('warning', 'Limited OCR data', 'Extracted text but could not identify passenger or flight information');
         }
       }
       
-      addNotification('warning', 'No barcode found', 'Could not detect a barcode in the captured image. Please try again.');
+      addNotification('warning', 'No data found', 'Could not detect barcode or extract meaningful text. Please ensure the boarding pass is clearly visible.');
+      
       // Resume continuous scanning if it was active
-      if (wasScanning && streamRef.current && videoRef.current) {
+      if (wasScanning && videoRef.current) {
         setTimeout(() => {
           startBoardingPassScanning();
         }, 500);
@@ -850,13 +1010,10 @@ export default function MobileScanner() {
     } catch (error) {
       console.error('Error capturing and scanning:', error);
       const errorMessage = error instanceof Error ? error.message : String(error);
-      if (errorMessage.includes('No barcode') || errorMessage.includes('not found')) {
-        addNotification('warning', 'No barcode found', 'Could not detect a barcode in the captured image. Please ensure the boarding pass is clearly visible and try again.');
-      } else {
-        addNotification('error', 'Scan failed', `Error while scanning captured image: ${errorMessage}`);
-      }
+      addNotification('error', 'Capture failed', `Error while processing image: ${errorMessage}`);
+      
       // Resume continuous scanning if it was active
-      if (wasScanning && streamRef.current && videoRef.current) {
+      if (wasScanning && videoRef.current) {
         setTimeout(() => {
           startBoardingPassScanning();
         }, 500);
