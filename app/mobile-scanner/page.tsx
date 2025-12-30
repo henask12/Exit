@@ -757,7 +757,8 @@ export default function MobileScanner() {
       const formData = new FormData();
       formData.append('file', imageBlob, 'boarding-pass.jpg');
       
-      const apiUrl = 'http://exit.runasp.net/api/BoardingPass/scan';
+      const apiUrl = 'https://alphaapi-et-transitpax.azurewebsites.net/api/BoardingPass/scan';
+
       console.log('🌐 Making API request to:', apiUrl, {
         method: 'POST',
         imageSize: imageBlob.size,
