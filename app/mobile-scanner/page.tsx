@@ -1142,44 +1142,6 @@ export default function MobileScanner() {
                 </div>
               )}
 
-              {/* Recent Scans - Above Camera */}
-              {recentScans.length > 0 && (
-                <div className="mb-4 sm:mb-6">
-                  <div className="flex items-center justify-between mb-3">
-                    <h3 className="text-sm font-semibold text-gray-900">Recent Scans</h3>
-                    <span className="text-sm text-gray-600">{recentScans.length} scanned</span>
-                  </div>
-                  <div className="space-y-2 max-h-96 overflow-y-auto">
-                    {recentScans.map((scan) => (
-                      <div key={scan.id} className="bg-gray-50 rounded-lg p-3 border border-gray-200">
-                        <div className="flex items-start justify-between">
-                          <div className="flex-1">
-                            {scan.boardingPass.passengerName && (
-                              <p className="text-sm font-semibold text-gray-900">{scan.boardingPass.passengerName}</p>
-                            )}
-                            <div className="flex flex-wrap gap-2 mt-1">
-                              {scan.boardingPass.flightNumber && (
-                                <span className="text-xs text-gray-600">Flight: {scan.boardingPass.flightNumber}</span>
-                              )}
-                              {scan.boardingPass.seat && (
-                                <span className="text-xs text-gray-600">Seat: {scan.boardingPass.seat}</span>
-                              )}
-                              {scan.boardingPass.pnr && (
-                                <span className="text-xs text-gray-600">PNR: {scan.boardingPass.pnr}</span>
-                              )}
-                            </div>
-                            <p className="text-xs text-gray-500 mt-1">{scan.scanTime} • {scan.source}</p>
-                          </div>
-                          <svg className="w-5 h-5 text-green-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                          </svg>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
               {/* API Connection Error Banner */}
               {apiConnectionError && (
                 <div className="mb-4 bg-red-50 border border-red-200 rounded-lg p-3 flex items-start gap-3">
@@ -1396,6 +1358,51 @@ export default function MobileScanner() {
                     ? 'Point camera at boarding pass barcode and tap the green button to capture & scan' 
                     : 'Tap the purple button for native camera or blue button for web camera'}
                 </p>
+              </div>
+
+              {/* Recent Scans - Below Camera */}
+              <div className="mt-6 sm:mt-8">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-base font-semibold text-gray-900">Recent Scans</h3>
+                  <span className="text-sm font-semibold text-blue-600 bg-blue-50 px-3 py-1 rounded-full">{recentScans.length} scanned</span>
+                </div>
+                {recentScans.length > 0 ? (
+                  <div className="space-y-2 max-h-96 overflow-y-auto">
+                    {recentScans.map((scan) => (
+                      <div key={scan.id} className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1">
+                            {scan.boardingPass.passengerName && (
+                              <p className="text-sm font-semibold text-gray-900">{scan.boardingPass.passengerName}</p>
+                            )}
+                            <div className="flex flex-wrap gap-2 mt-1">
+                              {scan.boardingPass.flightNumber && (
+                                <span className="text-xs text-gray-600">Flight: {scan.boardingPass.flightNumber}</span>
+                              )}
+                              {scan.boardingPass.seat && (
+                                <span className="text-xs text-gray-600">Seat: {scan.boardingPass.seat}</span>
+                              )}
+                              {scan.boardingPass.pnr && (
+                                <span className="text-xs text-gray-600">PNR: {scan.boardingPass.pnr}</span>
+                              )}
+                            </div>
+                            <p className="text-xs text-gray-500 mt-1">{scan.scanTime} • {scan.source}</p>
+                          </div>
+                          <svg className="w-5 h-5 text-green-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          </svg>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-center py-8 bg-gray-50 rounded-lg border border-gray-200">
+                    <svg className="w-12 h-12 mx-auto mb-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                    <p className="text-sm text-gray-500">No scans yet. Start scanning to see results here.</p>
+                  </div>
+                )}
               </div>
             </>
           )}
