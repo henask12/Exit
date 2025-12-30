@@ -227,10 +227,7 @@ export default function MobileScanner() {
       }
       
       setIsScanning(true);
-      addNotification('success', 'Camera started', 'Camera is ready for scanning');
-      
-      // Start scanning after camera is ready
-      startBoardingPassScanning();
+      addNotification('success', 'Camera started', 'Camera is ready. Tap the capture button to scan.');
       
     } catch (error: any) {
       console.error('Error starting camera:', error);
@@ -305,6 +302,7 @@ export default function MobileScanner() {
           }
           
           try {
+            
             // Send to API
             const apiResult = await scanBoardingPassAPI(blob);
             
@@ -355,6 +353,7 @@ export default function MobileScanner() {
               }, 3000);
             }
           } catch (apiError: any) {
+            
             // Handle API errors gracefully during continuous scanning
             const errorMessage = apiError?.message || 'Unknown error';
             
@@ -754,8 +753,9 @@ export default function MobileScanner() {
   // Send image to API for scanning
   const scanBoardingPassAPI = async (imageBlob: Blob): Promise<any> => {
     try {
+      
       const formData = new FormData();
-      formData.append('image', imageBlob, 'boarding-pass.jpg');
+      formData.append('file', imageBlob, 'boarding-pass.jpg');
       
       const apiUrl = 'http://exit.runasp.net/api/BoardingPass/scan';
       console.log('🌐 Making API request to:', apiUrl, {
@@ -764,6 +764,7 @@ export default function MobileScanner() {
         imageType: imageBlob.type,
         timestamp: new Date().toISOString()
       });
+      
       
       const response = await fetch(apiUrl, {
         method: 'POST',
@@ -810,8 +811,7 @@ export default function MobileScanner() {
       return;
     }
     
-    // Temporarily stop continuous scanning while capturing
-    const wasScanning = scanningActiveRef.current;
+    // Stop any active scanning
     stopScanning();
     
     try {
@@ -835,16 +835,11 @@ export default function MobileScanner() {
       canvas.toBlob(async (blob) => {
         if (!blob) {
           addNotification('error', 'Capture failed', 'Could not convert image to blob');
-          // Resume scanning if it was active
-          if (wasScanning && videoRef.current) {
-            setTimeout(() => {
-              startBoardingPassScanning();
-            }, 500);
-          }
           return;
         }
         
         try {
+          
           // Send to API
           console.log('📤 Sending image to API for scanning...', {
             blobSize: blob.size,
@@ -890,35 +885,13 @@ export default function MobileScanner() {
             setScanResult(scanData);
             
             addNotification('success', `${scanType} scan successful!`, `Detected: ${boardingPassData.passengerName || boardingPassData.flightNumber || 'Boarding pass'}`);
-            
-            // Resume scanning after 3 seconds
-            setTimeout(() => {
-              setScanResult(null);
-              if (streamRef.current && isScanning && videoRef.current) {
-                addNotification('info', 'Resuming scan...', 'Ready to scan next boarding pass');
-                startBoardingPassScanning();
-              }
-            }, 3000);
           } else {
             addNotification('warning', 'Scan failed', apiResult.error || 'Could not decode boarding pass');
-            // Resume scanning if it was active
-            if (wasScanning && videoRef.current) {
-              setTimeout(() => {
-                startBoardingPassScanning();
-              }, 500);
-            }
           }
         } catch (apiError) {
           console.error('API scan error:', apiError);
           const errorMessage = apiError instanceof Error ? apiError.message : String(apiError);
           addNotification('error', 'API Error', `Failed to scan: ${errorMessage}`);
-          
-          // Resume scanning if it was active
-          if (wasScanning && videoRef.current) {
-            setTimeout(() => {
-              startBoardingPassScanning();
-            }, 500);
-          }
         }
       }, 'image/jpeg', 0.9);
       
@@ -926,13 +899,6 @@ export default function MobileScanner() {
       console.error('Error capturing and scanning:', error);
       const errorMessage = error instanceof Error ? error.message : String(error);
       addNotification('error', 'Capture failed', `Error while processing image: ${errorMessage}`);
-      
-      // Resume continuous scanning if it was active
-      if (wasScanning && videoRef.current) {
-        setTimeout(() => {
-          startBoardingPassScanning();
-        }, 500);
-      }
     }
   };
 
@@ -1307,29 +1273,8 @@ export default function MobileScanner() {
 
               {/* Instructions */}
               <div className="text-center text-sm text-gray-600 space-y-1 mt-4">
-                <p>{isScanning ? 'Point camera at boarding pass barcode - scanning automatically, or tap the green button to capture & scan' : 'Tap the camera button to start scanning'}</p>
+                <p>{isScanning ? 'Point camera at boarding pass barcode and tap the green button to capture & scan' : 'Tap the camera button to start'}</p>
               </div>
-              
-              {/* Reset Scanning Button - appears if scanning is stuck */}
-              {isScanning && scanningActiveRef.current && (
-                <div className="text-center mt-2">
-                  <button
-                    onClick={() => {
-                      console.log('Manual reset of scanning');
-                      scanningActiveRef.current = false;
-                      addNotification('info', 'Scanning reset', 'Resetting scanner. Please wait...');
-                      setTimeout(() => {
-                        if (streamRef.current && videoRef.current && codeReaderRef.current) {
-                          startBoardingPassScanning();
-                        }
-                      }, 1000);
-                    }}
-                    className="text-xs text-blue-600 hover:text-blue-700 underline"
-                  >
-                    Reset Scanner
-                  </button>
-                </div>
-              )}
             </>
           )}
         </div>
