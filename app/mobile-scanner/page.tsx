@@ -328,7 +328,8 @@ export default function MobileScanner() {
       await worker.terminate();
       
       if (text && text.trim().length > 0) {
-        console.log('OCR extracted text:', text);
+        console.log('OCR extracted raw text:', text);
+        console.log('OCR text length:', text.length);
         return text.trim();
       }
       
@@ -355,68 +356,122 @@ export default function MobileScanner() {
       source: 'OCR'
     };
     
-    // Extract passenger name (common patterns)
-    const namePatterns = [
-      /([A-Z]+\/[A-Z]+(?:\s+[A-Z]+)?)/, // LASTNAME/FIRSTNAME
-      /(?:PASSENGER|PAX|NAME)[:\s]+([A-Z\s\/]+)/i,
-      /^([A-Z]+\s+[A-Z]+(?:\s+[A-Z]+)?)/, // First line might be name
-      /([A-Z]{2,}\s+[A-Z]{2,})/ // Two or more capital words
-    ];
+    // Normalize text - remove extra spaces and newlines
+    const normalizedText = ocrText.replace(/\s+/g, ' ').toUpperCase();
     
-    for (const pattern of namePatterns) {
-      const match = ocrText.match(pattern);
-      if (match) {
-        const name = match[1].trim();
-        if (name.includes('/')) {
-          const [last, first] = name.split('/');
-          extracted.passengerName = `${first.trim()} ${last.trim()}`;
-        } else {
-          extracted.passengerName = name;
-        }
-        break;
+    // Extract passenger name - look for pattern LASTNAME/FIRSTNAME MS/MR
+    // Ethiopian Airlines format: SAMUEL/ALERU MS
+    const namePattern = /([A-Z]{2,}\/[A-Z]{2,}(?:\s+[A-Z]+)?(?:\s+(?:MS|MR|MRS|MISS))?)/;
+    const nameMatch = normalizedText.match(namePattern);
+    if (nameMatch) {
+      const namePart = nameMatch[1].trim();
+      // Remove title if present
+      const nameWithoutTitle = namePart.replace(/\s+(MS|MR|MRS|MISS)$/, '');
+      if (nameWithoutTitle.includes('/')) {
+        const [last, first] = nameWithoutTitle.split('/');
+        extracted.passengerName = `${first.trim()} ${last.trim()}`;
+      } else {
+        extracted.passengerName = nameWithoutTitle;
       }
     }
     
-    // Extract flight number (e.g., ET302, AA1234)
-    const flightMatch = ocrText.match(/([A-Z]{2,3}\s*\d{2,4})/);
-    if (flightMatch) {
-      extracted.flightNumber = flightMatch[1].replace(/\s+/g, '');
-      extracted.airline = extracted.flightNumber.substring(0, 2);
+    // Extract flight number - Ethiopian Airlines format: ET938, ET706
+    // Look for pattern ET followed by 3-4 digits, avoid matching random text
+    const flightPatterns = [
+      /(?:FLIGHT|FLT)[:\s]*([A-Z]{2}\d{3,4})/i, // After "FLIGHT" label
+      /\b(ET\d{3,4})\b/, // ET followed by 3-4 digits as word boundary
+      /\b([A-Z]{2}\d{3,4})\b/ // Any 2-letter airline code + 3-4 digits
+    ];
+    
+    for (const pattern of flightPatterns) {
+      const match = normalizedText.match(pattern);
+      if (match) {
+        const flight = match[1].replace(/\s+/g, '');
+        // Validate it's a real flight number (not random text)
+        if (flight.length >= 5 && flight.length <= 6 && /^[A-Z]{2}\d{3,4}$/.test(flight)) {
+          extracted.flightNumber = flight;
+          extracted.airline = flight.substring(0, 2);
+          break;
+        }
+      }
     }
     
-    // Extract seat (e.g., 15F, 12A)
-    const seatMatch = ocrText.match(/(\d{1,2}[A-Z])/);
-    if (seatMatch) {
-      extracted.seat = seatMatch[1];
+    // Extract seat - look for pattern after "SEAT" label or standalone pattern
+    // Format: 11A, 21A (1-2 digits + 1 letter)
+    const seatPatterns = [
+      /(?:SEAT|ST)[:\s]*(\d{1,2}[A-Z])/i, // After "SEAT" label
+      /\b(\d{1,2}[A-Z])\b/ // Standalone seat pattern
+    ];
+    
+    for (const pattern of seatPatterns) {
+      const match = normalizedText.match(pattern);
+      if (match) {
+        const seat = match[1];
+        // Validate seat (1-2 digits + 1 letter, not part of flight number)
+        if (/^\d{1,2}[A-Z]$/.test(seat) && !seat.match(/^\d{3,4}[A-Z]$/)) {
+          extracted.seat = seat;
+          break;
+        }
+      }
     }
     
-    // Extract date
+    // Extract date - Ethiopian Airlines format: 10DEC
     const datePatterns = [
-      /(\d{2}[A-Z]{3}\d{2})/, // 15JAN24
-      /(\d{4}-\d{2}-\d{2})/, // 2024-01-15
-      /(\d{2}\/\d{2}\/\d{4})/, // 01/15/2024
-      /(\d{2}\/\d{2}\/\d{2})/ // 01/15/24
+      /(\d{1,2}[A-Z]{3}\d{0,2})/, // 10DEC or 10DEC24
+      /(\d{2}[A-Z]{3}\d{2})/, // 10DEC24
+      /(\d{1,2}[A-Z]{3})/ // 10DEC
     ];
     
     for (const pattern of datePatterns) {
-      const match = ocrText.match(pattern);
+      const match = normalizedText.match(pattern);
       if (match) {
         extracted.date = match[1];
         break;
       }
     }
     
-    // Extract PNR (6 alphanumeric characters)
-    const pnrMatch = ocrText.match(/([A-Z0-9]{6})/);
-    if (pnrMatch) {
-      extracted.pnr = pnrMatch[1];
+    // Extract PNR/Booking Code - 6 alphanumeric characters
+    // Look for "BOOKING CODE" or "PNR" label, or standalone 6-char code
+    const pnrPatterns = [
+      /(?:BOOKING\s+CODE|PNR|BOOKING)[:\s]*([A-Z0-9]{6})/i,
+      /\b([A-Z0-9]{6})\b/ // Standalone 6-character code
+    ];
+    
+    for (const pattern of pnrPatterns) {
+      const match = normalizedText.match(pattern);
+      if (match) {
+        const pnr = match[1];
+        // Validate it's not a flight number or date
+        if (!pnr.match(/^[A-Z]{2}\d{4}$/) && !pnr.match(/^\d{6}$/)) {
+          extracted.pnr = pnr;
+          break;
+        }
+      }
     }
     
-    // Extract class (e.g., Y, J, F)
-    const classMatch = ocrText.match(/\b([YJFC])\b/);
-    if (classMatch) {
-      extracted.class = classMatch[1];
+    // Extract class - look for Y, J, F, C after "CLASS" label
+    const classPatterns = [
+      /(?:CLASS)[:\s]*([YJFC])/i,
+      /\b([YJFC])\b/ // Standalone class code
+    ];
+    
+    for (const pattern of classPatterns) {
+      const match = normalizedText.match(pattern);
+      if (match) {
+        extracted.class = match[1];
+        break;
+      }
     }
+    
+    // Log extracted data for debugging
+    console.log('OCR Extraction Results:', {
+      passengerName: extracted.passengerName,
+      flightNumber: extracted.flightNumber,
+      seat: extracted.seat,
+      pnr: extracted.pnr,
+      date: extracted.date,
+      class: extracted.class
+    });
     
     return extracted;
   };
