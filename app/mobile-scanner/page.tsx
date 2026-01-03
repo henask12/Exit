@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import Header from '../components/Header';
 import { BrowserMultiFormatReader } from '@zxing/browser';
 import { NotFoundException, DecodeHintType, BarcodeFormat } from '@zxing/library';
@@ -18,6 +18,12 @@ export default function MobileScanner() {
   const [notifications, setNotifications] = useState<Array<{id: string, type: 'success' | 'error' | 'warning' | 'info', message: string, details?: string}>>([]);
   const [apiConnectionError, setApiConnectionError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [scanStatus, setScanStatus] = useState<'loading' | 'success' | 'error' | null>(null);
+  const [station, setStation] = useState<string>('GVA');
+  const [flightNumber, setFlightNumber] = useState<string>('');
+  const [flightDate, setFlightDate] = useState<string>('');
+  const [flightNumbers, setFlightNumbers] = useState<Array<string>>([]);
+  const [isLoadingFlights, setIsLoadingFlights] = useState(false);
   
   const videoRef = useRef<HTMLVideoElement>(null);
   const codeReaderRef = useRef<BrowserMultiFormatReader | null>(null);
@@ -305,12 +311,14 @@ export default function MobileScanner() {
           
           try {
             setIsLoading(true);
+            setScanStatus('loading');
             
             // Send to API
             const apiResult = await scanBoardingPassAPI(blob);
             
             if (apiResult.success && apiResult.decodedText && scanningActiveRef.current) {
               console.log('API scan result:', apiResult);
+              setScanStatus('success');
               const scanType = apiResult.scanType || 'Barcode';
               const decodedText = apiResult.decodedText;
               
@@ -349,13 +357,20 @@ export default function MobileScanner() {
               // Resume scanning after 3 seconds
               setTimeout(() => {
                 setScanResult(null);
+                setScanStatus(null);
                 if (streamRef.current && isScanning && videoRef.current) {
                   addNotification('info', 'Resuming scan...', 'Ready to scan next boarding pass');
                   startBoardingPassScanning();
                 }
               }, 3000);
+            } else {
+              setScanStatus('error');
+              setTimeout(() => {
+                setScanStatus(null);
+              }, 2000);
             }
           } catch (apiError: any) {
+            setScanStatus('error');
             
             // Handle API errors gracefully during continuous scanning
             const errorMessage = apiError?.message || 'Unknown error';
@@ -371,6 +386,10 @@ export default function MobileScanner() {
               // Other errors (like "no barcode found") are normal during scanning
               console.log('API scan attempt failed (normal during continuous scanning):', apiError);
             }
+            
+            setTimeout(() => {
+              setScanStatus(null);
+            }, 2000);
           } finally {
             setIsLoading(false);
           }
@@ -755,6 +774,100 @@ export default function MobileScanner() {
   };
 
 
+  // Get date options (today-1, today, today+1)
+  const getDateOptions = () => {
+    const today = new Date();
+    const dates = [];
+    for (let i = -1; i <= 1; i++) {
+      const date = new Date(today);
+      date.setDate(today.getDate() + i);
+      dates.push({
+        label: i === 0 ? 'Today' : i === -1 ? 'Yesterday' : 'Tomorrow',
+        value: date.toISOString().split('T')[0], // YYYY-MM-DD format
+        date: date
+      });
+    }
+    return dates;
+  };
+
+  // Fetch flight numbers from API
+  const fetchFlightNumbers = async (station: string, flightDate: string) => {
+    if (!station || !flightDate) return;
+    
+    try {
+      setIsLoadingFlights(true);
+      // TODO: Replace with actual API endpoint
+      const apiUrl = `https://alphaapi-et-transitpax.azurewebsites.net/api/Flight/GetFlights?station=${station}&flightDate=${flightDate}`;
+      
+      const response = await fetch(apiUrl, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Failed to fetch flights: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      // Assuming API returns array of flight objects with flightNumber property or array of strings
+      let flights: string[] = [];
+      if (Array.isArray(data)) {
+        flights = data.map((item: any) => typeof item === 'string' ? item : (item.flightNumber || item.flight || String(item)));
+      } else if (data.flights && Array.isArray(data.flights)) {
+        flights = data.flights.map((item: any) => typeof item === 'string' ? item : (item.flightNumber || item.flight || String(item)));
+      }
+      setFlightNumbers(flights);
+    } catch (error) {
+      console.error('Error fetching flight numbers:', error);
+      addNotification('error', 'Failed to load flights', 'Could not fetch flight numbers from API');
+      setFlightNumbers([]);
+    } finally {
+      setIsLoadingFlights(false);
+    }
+  };
+
+  // Call API when station, flightNumber, and flightDate are selected
+  const handleFlightSelection = useCallback(async () => {
+    if (station && flightNumber && flightDate) {
+      try {
+        // TODO: Replace with actual API endpoint
+        const apiUrl = `https://alphaapi-et-transitpax.azurewebsites.net/api/Flight/SelectFlight?station=${station}&flightNumber=${flightNumber}&flightDate=${flightDate}`;
+        
+        const response = await fetch(apiUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        });
+        
+        if (!response.ok) {
+          throw new Error(`Failed to select flight: ${response.status}`);
+        }
+        
+        const data = await response.json();
+        addNotification('success', 'Flight selected', `Flight ${flightNumber} for ${flightDate} is now active`);
+        console.log('Flight selection result:', data);
+      } catch (error) {
+        console.error('Error selecting flight:', error);
+        addNotification('error', 'Failed to select flight', 'Could not process flight selection');
+      }
+    }
+  }, [station, flightNumber, flightDate]);
+
+  // Effect to fetch flights when station and date change
+  useEffect(() => {
+    if (station && flightDate) {
+      fetchFlightNumbers(station, flightDate);
+    }
+  }, [station, flightDate]);
+
+  // Effect to call API when all three are selected
+  useEffect(() => {
+    handleFlightSelection();
+  }, [handleFlightSelection]);
+
   // Send image to API for scanning
   const scanBoardingPassAPI = async (imageBlob: Blob): Promise<any> => {
     try {
@@ -824,6 +937,7 @@ export default function MobileScanner() {
     
     try {
       setIsLoading(true);
+      setScanStatus('loading');
       
       // Convert file to blob
       const blob = await file.arrayBuffer().then(buffer => new Blob([buffer], { type: file.type }));
@@ -832,6 +946,7 @@ export default function MobileScanner() {
       const apiResult = await scanBoardingPassAPI(blob);
       
       if (apiResult.success && apiResult.decodedText) {
+        setScanStatus('success');
         const scanType = apiResult.scanType || 'Barcode';
         const decodedText = apiResult.decodedText;
         
@@ -863,15 +978,24 @@ export default function MobileScanner() {
         // Clear result after 2 seconds to be ready for next capture
         setTimeout(() => {
           setScanResult(null);
+          setScanStatus(null);
           addNotification('info', 'Ready for next scan', 'Camera ready to capture again');
         }, 1000);
       } else {
+        setScanStatus('error');
         addNotification('warning', 'Scan failed', apiResult.error || 'Could not decode boarding pass');
+        setTimeout(() => {
+          setScanStatus(null);
+        }, 2000);
       }
     } catch (error) {
       console.error('Error processing native camera image:', error);
+      setScanStatus('error');
       const errorMessage = error instanceof Error ? error.message : String(error);
       addNotification('error', 'Processing failed', `Error: ${errorMessage}`);
+      setTimeout(() => {
+        setScanStatus(null);
+      }, 2000);
     } finally {
       setIsLoading(false);
     }
@@ -920,6 +1044,7 @@ export default function MobileScanner() {
         
         try {
           setIsLoading(true);
+          setScanStatus('loading');
           
           // Send to API (don't save yet)
           console.log('📤 Sending image to API for scanning...', {
@@ -939,6 +1064,7 @@ export default function MobileScanner() {
           
           if (apiResult.success && apiResult.decodedText) {
             console.log('API scan result:', apiResult);
+            setScanStatus('success');
             const scanType = apiResult.scanType || 'Barcode';
             const decodedText = apiResult.decodedText;
             
@@ -970,30 +1096,35 @@ export default function MobileScanner() {
             // Clear result after 2 seconds to be ready for next capture
             setTimeout(() => {
               setScanResult(null);
+              setScanStatus(null);
               // Resume camera scanning if still active
               // if (streamRef.current && isScanning && videoRef.current) {
               //   addNotification('info', 'Ready for next scan', 'Camera ready to capture again');
               // }
-            }, 100);
+            }, 2000);
           } else {
+            setScanStatus('error');
             addNotification('warning', 'Scan failed', apiResult.error || 'Could not decode boarding pass');
             // Still ready for next capture even on failure
             setTimeout(() => {
+              setScanStatus(null);
               // if (streamRef.current && isScanning && videoRef.current) {
               //   addNotification('info', 'Ready for next scan', 'Camera ready to capture again');
               // }
-            }, 100);
+            }, 2000);
           }
           } catch (apiError) {
           console.error('API scan error:', apiError);
+          setScanStatus('error');
           const errorMessage = apiError instanceof Error ? apiError.message : String(apiError);
           addNotification('error', 'API Error', `Failed to scan: ${errorMessage}`);
           // Still ready for next capture even on error
           setTimeout(() => {
+              setScanStatus(null);
               // if (streamRef.current && isScanning && videoRef.current) {
               //   addNotification('info', 'Ready for next scan', 'Camera ready to capture again');
               // }
-           }, 100);
+           }, 2000);
         } finally {
           setIsLoading(false);
         }
@@ -1088,16 +1219,69 @@ export default function MobileScanner() {
       
       <main className="flex-1 flex items-center justify-center px-2 sm:px-4 py-4 sm:py-8">
         <div className="bg-white rounded-xl sm:rounded-2xl shadow-2xl w-full max-w-md sm:max-w-lg md:max-w-2xl lg:max-w-4xl p-4 sm:p-6">
-          {/* Status Bar */}
+          {/* Status Bar with Station */}
           <div className="flex items-center justify-between mb-4 text-sm text-gray-600">
             <span>{new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-            <div className="flex items-center gap-2">
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0" />
-              </svg>
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-              </svg>
+            <div className="flex items-center gap-3">
+              {/* Station Display */}
+              <div className="flex items-center gap-2 bg-[#00A651] text-white px-3 py-1.5 rounded-lg font-semibold">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                </svg>
+                <span>{station}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0" />
+                </svg>
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                </svg>
+              </div>
+            </div>
+          </div>
+
+          {/* Flight Selection Filters */}
+          <div className="mb-4 sm:mb-6 grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {/* Date Picker */}
+            <div>
+              <label className="block text-xs font-semibold text-gray-700 mb-1.5">Flight Date</label>
+              <select
+                value={flightDate}
+                onChange={(e) => {
+                  setFlightDate(e.target.value);
+                  setFlightNumber(''); // Reset flight number when date changes
+                }}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#00A651] focus:border-transparent"
+              >
+                <option value="">Select Date</option>
+                {getDateOptions().map((dateOption) => (
+                  <option key={dateOption.value} value={dateOption.value}>
+                    {dateOption.label} ({dateOption.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Flight Number Dropdown */}
+            <div>
+              <label className="block text-xs font-semibold text-gray-700 mb-1.5">Flight Number</label>
+              <select
+                value={flightNumber}
+                onChange={(e) => setFlightNumber(e.target.value)}
+                disabled={!flightDate || isLoadingFlights}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#00A651] focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed"
+              >
+                <option value="">
+                  {isLoadingFlights ? 'Loading flights...' : !flightDate ? 'Select date first' : 'Select Flight'}
+                </option>
+                {flightNumbers.map((flight, index) => (
+                  <option key={index} value={flight}>
+                    {flight}
+                  </option>
+                ))}
+              </select>
             </div>
           </div>
 
@@ -1239,18 +1423,52 @@ export default function MobileScanner() {
                     </div>
                   )}
 
-                  {/* Loading Overlay */}
-                  {isLoading && (
+                  {/* Status Overlay - Loading, Success, or Error */}
+                  {scanStatus && (
                     <div className="absolute inset-0 bg-black bg-opacity-60 flex items-center justify-center z-20 rounded-lg">
-                      <div className="bg-white rounded-xl p-6 sm:p-8 shadow-2xl max-w-xs w-full mx-4">
+                      <div className={`rounded-xl p-6 sm:p-8 shadow-2xl max-w-xs w-full mx-4 ${
+                        scanStatus === 'success' 
+                          ? 'bg-[#00A651]' // ET Green
+                          : scanStatus === 'error'
+                          ? 'bg-red-600'
+                          : 'bg-white'
+                      }`}>
                         <div className="flex flex-col items-center">
-                          {/* Spinner */}
-                          <div className="relative w-16 h-16 mb-4">
-                            <div className="absolute inset-0 border-4 border-blue-200 rounded-full"></div>
-                            <div className="absolute inset-0 border-4 border-blue-600 rounded-full border-t-transparent animate-spin"></div>
-                          </div>
-                          <p className="text-lg font-semibold text-gray-900 mb-1">Processing...</p>
-                          <p className="text-sm text-gray-600 text-center">Sending image to API for scanning</p>
+                          {scanStatus === 'loading' && (
+                            <>
+                              {/* Spinner */}
+                              <div className="relative w-16 h-16 mb-4">
+                                <div className="absolute inset-0 border-4 border-blue-200 rounded-full"></div>
+                                <div className="absolute inset-0 border-4 border-blue-600 rounded-full border-t-transparent animate-spin"></div>
+                              </div>
+                              <p className="text-lg font-semibold text-gray-900 mb-1">Processing...</p>
+                              <p className="text-sm text-gray-600 text-center">Sending image to API for scanning</p>
+                            </>
+                          )}
+                          {scanStatus === 'success' && (
+                            <>
+                              {/* Check Icon */}
+                              <div className="w-20 h-20 mb-4 bg-white rounded-full flex items-center justify-center">
+                                <svg className="w-12 h-12 text-[#00A651]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                                </svg>
+                              </div>
+                              <p className="text-xl font-bold text-white mb-1">Success!</p>
+                              <p className="text-sm text-white/90 text-center">Boarding pass scanned successfully</p>
+                            </>
+                          )}
+                          {scanStatus === 'error' && (
+                            <>
+                              {/* X Icon */}
+                              <div className="w-20 h-20 mb-4 bg-white rounded-full flex items-center justify-center">
+                                <svg className="w-12 h-12 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" />
+                                </svg>
+                              </div>
+                              <p className="text-xl font-bold text-white mb-1">Failed</p>
+                              <p className="text-sm text-white/90 text-center">Could not scan boarding pass</p>
+                            </>
+                          )}
                         </div>
                       </div>
                     </div>
