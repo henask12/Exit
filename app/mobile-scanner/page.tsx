@@ -25,6 +25,8 @@ export default function MobileScanner() {
   const [flightNumbers, setFlightNumbers] = useState<Array<number>>([]);
   const [isLoadingFlights, setIsLoadingFlights] = useState(false);
   const [flightDetails, setFlightDetails] = useState<any>(null);
+  const [scannedPassengers, setScannedPassengers] = useState<Set<string>>(new Set());
+  const [showRemainingPassengers, setShowRemainingPassengers] = useState(false);
   
   const videoRef = useRef<HTMLVideoElement>(null);
   const codeReaderRef = useRef<BrowserMultiFormatReader | null>(null);
@@ -853,8 +855,9 @@ export default function MobileScanner() {
         
         // Store flight details
         setFlightDetails(data);
+        // Reset scanned passengers when new flight is loaded
+        setScannedPassengers(new Set());
         
-        addNotification('success', 'Flight loaded', `Flight ${flightNumber} for ${flightDate} - ${data.totalPassengers} passengers, ${data.disembarkingPassengerCount} disembarking`);
         console.log('Flight details:', data);
         
         // Switch to camera view
@@ -960,6 +963,9 @@ export default function MobileScanner() {
         // Parse the decoded text
         const boardingPassData = parseBoardingPass(decodedText);
         
+        // Match with flight details
+        const matchResult = matchPassenger(boardingPassData);
+        
         // Create scan result
         const scanData = {
           id: Date.now().toString(),
@@ -969,18 +975,29 @@ export default function MobileScanner() {
           scanTime: new Date().toLocaleTimeString(),
           scanDate: new Date().toLocaleDateString(),
           barcodeText: decodedText,
-              barcodeFormat: apiResult.barcodeFormat,
-              ocrConfidence: apiResult.ocrConfidence,
-              timestamp: new Date().toISOString()
-            };
-            
-            // Add to recent scans (save all scans, no limit)
+          barcodeFormat: apiResult.barcodeFormat,
+          ocrConfidence: apiResult.ocrConfidence,
+          timestamp: new Date().toISOString(),
+          matched: matchResult.matched,
+          matchedPassenger: matchResult.passenger
+        };
+        
+        // If matched, add to scanned passengers
+        if (matchResult.matched && matchResult.matchKey) {
+          setScannedPassengers(prev => new Set([...prev, matchResult.matchKey!]));
+        }
+        
+        // Add to recent scans (save all scans, no limit)
         setRecentScans(prev => [scanData, ...prev]);
         
         // Display result
         setScanResult(scanData);
         
-        addNotification('success', `${scanType} scan successful!`, `Detected: ${boardingPassData.passengerName || boardingPassData.flightNumber || 'Boarding pass'}`);
+        if (matchResult.matched) {
+          addNotification('success', `${scanType} scan successful!`, `Matched: ${matchResult.passenger?.passengerName || boardingPassData.passengerName}`);
+        } else {
+          addNotification('warning', `${scanType} scan successful!`, `Not found in flight manifest: ${boardingPassData.passengerName || boardingPassData.flightNumber || 'Boarding pass'}`);
+        }
         
         // Clear result after 2 seconds to be ready for next capture
         setTimeout(() => {
@@ -1015,10 +1032,43 @@ export default function MobileScanner() {
     }
   };
 
+  // Match scanned passenger with flight details
+  const matchPassenger = (boardingPassData: any): { matched: boolean; passenger?: any; matchKey?: string } => {
+    if (!flightDetails || !flightDetails.disembarkingPassengers) {
+      return { matched: false };
+    }
+
+    const pnr = boardingPassData.pnr?.toUpperCase();
+    const seat = boardingPassData.seat?.toUpperCase();
+    const passengerName = boardingPassData.passengerName?.toUpperCase();
+
+    // Try to match by PNR first, then seat, then name
+    for (const passenger of flightDetails.disembarkingPassengers) {
+      const matchKey = `${passenger.pnrLocator || ''}_${passenger.seat || ''}`.toUpperCase();
+      
+      if (pnr && passenger.pnrLocator?.toUpperCase() === pnr) {
+        return { matched: true, passenger, matchKey };
+      }
+      if (seat && passenger.seat?.toUpperCase() === seat) {
+        return { matched: true, passenger, matchKey };
+      }
+      if (passengerName && passenger.passengerName?.toUpperCase().includes(passengerName)) {
+        return { matched: true, passenger, matchKey };
+      }
+    }
+
+    return { matched: false };
+  };
+
   // Capture and scan from image - using API
   const captureAndScan = async () => {
-    if (!videoRef.current) {
-      addNotification('error', 'Camera not ready', 'Please ensure camera is started before capturing');
+    if (!videoRef.current || !isScanning) {
+      addNotification('error', 'Camera not ready', 'Please start the camera first');
+      return;
+    }
+    
+    if (videoRef.current.videoWidth === 0 || videoRef.current.videoHeight === 0) {
+      addNotification('error', 'Camera not ready', 'Camera stream not ready yet');
       return;
     }
     
@@ -1026,8 +1076,6 @@ export default function MobileScanner() {
     stopScanning();
     
     try {
-      // addNotification('info', 'Capturing...', 'Sending image to API for scanning...');
-      
       // Create canvas to capture current frame
       const canvas = document.createElement('canvas');
       canvas.width = videoRef.current.videoWidth;
@@ -1078,6 +1126,9 @@ export default function MobileScanner() {
             // Parse the decoded text
             const boardingPassData = parseBoardingPass(decodedText);
             
+            // Match with flight details
+            const matchResult = matchPassenger(boardingPassData);
+            
             // Create scan result
             const scanData = {
               id: Date.now().toString(),
@@ -1089,8 +1140,15 @@ export default function MobileScanner() {
               barcodeText: decodedText,
               barcodeFormat: apiResult.barcodeFormat,
               ocrConfidence: apiResult.ocrConfidence,
-              timestamp: new Date().toISOString()
+              timestamp: new Date().toISOString(),
+              matched: matchResult.matched,
+              matchedPassenger: matchResult.passenger
             };
+            
+            // If matched, add to scanned passengers
+            if (matchResult.matched && matchResult.matchKey) {
+              setScannedPassengers(prev => new Set([...prev, matchResult.matchKey!]));
+            }
             
             // Add to recent scans (save all scans, no limit)
             setRecentScans(prev => [scanData, ...prev]);
@@ -1098,7 +1156,11 @@ export default function MobileScanner() {
             // Display result
             setScanResult(scanData);
             
-            addNotification('success', `${scanType} scan successful!`, `Detected: ${boardingPassData.passengerName || boardingPassData.flightNumber || 'Boarding pass'}`);
+            if (matchResult.matched) {
+              addNotification('success', `${scanType} scan successful!`, `Matched: ${matchResult.passenger?.passengerName || boardingPassData.passengerName}`);
+            } else {
+              addNotification('warning', `${scanType} scan successful!`, `Not found in flight manifest: ${boardingPassData.passengerName || boardingPassData.flightNumber || 'Boarding pass'}`);
+            }
             
             // Clear result after 2 seconds to be ready for next capture
             setTimeout(() => {
@@ -1314,8 +1376,6 @@ export default function MobileScanner() {
                       <span className="font-semibold">ET{flightDetails.flightNumber}</span>
                       <span className="text-gray-400">•</span>
                       <span>{flightDetails.totalPassengers} Total</span>
-                      <span className="text-gray-400">•</span>
-                      <span className="text-[#00A651] font-semibold">{flightDetails.disembarkingPassengerCount} Disembarking</span>
                     </div>
                   )}
                 </div>
@@ -1338,6 +1398,75 @@ export default function MobileScanner() {
                   </div>
                 </div>
               </div>
+
+              {/* Disembarking Passengers Status */}
+              {flightDetails && (
+                <div className="mb-4 bg-gray-50 rounded-lg p-3 border border-gray-200">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-4">
+                      <div>
+                        <p className="text-xs text-gray-500 mb-0.5">Disembarking</p>
+                        <p className="text-lg font-bold text-gray-900">{flightDetails.disembarkingPassengerCount}</p>
+                      </div>
+                      <div className="w-px h-8 bg-gray-300"></div>
+                      <div>
+                        <p className="text-xs text-gray-500 mb-0.5">Scanned & Matched</p>
+                        <p className={`text-lg font-bold ${scannedPassengers.size === flightDetails.disembarkingPassengerCount ? 'text-[#00A651]' : 'text-orange-600'}`}>
+                          {scannedPassengers.size}
+                        </p>
+                      </div>
+                      {scannedPassengers.size === flightDetails.disembarkingPassengerCount && (
+                        <div className="flex items-center gap-1 text-[#00A651]">
+                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                          </svg>
+                          <span className="text-sm font-semibold">All Passengers Scanned</span>
+                        </div>
+                      )}
+                    </div>
+                    {flightDetails.disembarkingPassengerCount > scannedPassengers.size && (
+                      <button
+                        onClick={() => setShowRemainingPassengers(!showRemainingPassengers)}
+                        className="text-sm text-blue-600 hover:text-blue-800 font-semibold flex items-center gap-1"
+                      >
+                        <span>View Remaining ({flightDetails.disembarkingPassengerCount - scannedPassengers.size})</span>
+                        <svg className={`w-4 h-4 transition-transform ${showRemainingPassengers ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                        </svg>
+                      </button>
+                    )}
+                  </div>
+                  
+                  {/* Remaining Passengers List */}
+                  {showRemainingPassengers && flightDetails.disembarkingPassengerCount > scannedPassengers.size && (
+                    <div className="mt-3 pt-3 border-t border-gray-200">
+                      <p className="text-xs font-semibold text-gray-700 mb-2">Remaining Passengers:</p>
+                      <div className="space-y-2 max-h-48 overflow-y-auto">
+                        {flightDetails.disembarkingPassengers
+                          .filter((p: any) => {
+                            const matchKey = `${p.pnrLocator || ''}_${p.seat || ''}`.toUpperCase();
+                            return !scannedPassengers.has(matchKey);
+                          })
+                          .map((passenger: any, index: number) => (
+                            <div key={index} className="bg-white rounded p-2 border border-gray-200">
+                              <div className="flex items-center justify-between">
+                                <div>
+                                  <p className="text-sm font-semibold text-gray-900">{passenger.passengerName}</p>
+                                  <div className="flex items-center gap-3 mt-1">
+                                    <span className="text-xs text-gray-600">Seat: {passenger.seat}</span>
+                                    {passenger.pnrLocator && (
+                                      <span className="text-xs text-gray-600">PNR: {passenger.pnrLocator}</span>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Permission Prompt Overlay */}
               {showPermissionPrompt && cameraPermission !== 'granted' && (
