@@ -6,10 +6,10 @@ import { BrowserMultiFormatReader } from '@zxing/browser';
 import { NotFoundException, DecodeHintType, BarcodeFormat } from '@zxing/library';
 import { createWorker } from 'tesseract.js';
 
-type ViewMode = 'camera';
+type ViewMode = 'flight-selection' | 'camera';
 
 export default function MobileScanner() {
-  const [currentView, setCurrentView] = useState<ViewMode>('camera');
+  const [currentView, setCurrentView] = useState<ViewMode>('flight-selection');
   const [isScanning, setIsScanning] = useState(false);
   const [scanResult, setScanResult] = useState<any>(null);
   const [recentScans, setRecentScans] = useState<Array<any>>([]);
@@ -22,8 +22,9 @@ export default function MobileScanner() {
   const [station, setStation] = useState<string>('GVA');
   const [flightNumber, setFlightNumber] = useState<string>('');
   const [flightDate, setFlightDate] = useState<string>('');
-  const [flightNumbers, setFlightNumbers] = useState<Array<string>>([]);
+  const [flightNumbers, setFlightNumbers] = useState<Array<number>>([]);
   const [isLoadingFlights, setIsLoadingFlights] = useState(false);
+  const [flightDetails, setFlightDetails] = useState<any>(null);
   
   const videoRef = useRef<HTMLVideoElement>(null);
   const codeReaderRef = useRef<BrowserMultiFormatReader | null>(null);
@@ -796,8 +797,7 @@ export default function MobileScanner() {
     
     try {
       setIsLoadingFlights(true);
-      // TODO: Replace with actual API endpoint
-      const apiUrl = `https://alphaapi-et-transitpax.azurewebsites.net/api/Flight/GetFlights?station=${station}&flightDate=${flightDate}`;
+      const apiUrl = `https://alphaapi-et-transitpax.azurewebsites.net/api/Flight/numbers?station=${station}&flightDate=${flightDate}`;
       
       const response = await fetch(apiUrl, {
         method: 'GET',
@@ -811,12 +811,14 @@ export default function MobileScanner() {
       }
       
       const data = await response.json();
-      // Assuming API returns array of flight objects with flightNumber property or array of strings
-      let flights: string[] = [];
+      // API returns array of numbers like [309, 318, 322, ...]
+      let flights: number[] = [];
       if (Array.isArray(data)) {
-        flights = data.map((item: any) => typeof item === 'string' ? item : (item.flightNumber || item.flight || String(item)));
+        flights = data.map((item: any) => typeof item === 'number' ? item : Number(item));
       } else if (data.flights && Array.isArray(data.flights)) {
-        flights = data.flights.map((item: any) => typeof item === 'string' ? item : (item.flightNumber || item.flight || String(item)));
+        flights = data.flights.map((item: any) => typeof item === 'number' ? item : Number(item));
+      } else if (data.flightNumbers && Array.isArray(data.flightNumbers)) {
+        flights = data.flightNumbers.map((item: any) => typeof item === 'number' ? item : Number(item));
       }
       setFlightNumbers(flights);
     } catch (error) {
@@ -828,33 +830,43 @@ export default function MobileScanner() {
     }
   };
 
-  // Call API when station, flightNumber, and flightDate are selected
-  const handleFlightSelection = useCallback(async () => {
+  // Handle flight selection and switch to camera view
+  const handleFlightSelect = async () => {
     if (station && flightNumber && flightDate) {
       try {
-        // TODO: Replace with actual API endpoint
-        const apiUrl = `https://alphaapi-et-transitpax.azurewebsites.net/api/Flight/SelectFlight?station=${station}&flightNumber=${flightNumber}&flightDate=${flightDate}`;
+        setIsLoadingFlights(true);
+        // Call API to get flight details
+        const apiUrl = `https://alphaapi-et-transitpax.azurewebsites.net/api/Flight/details?flightNumber=${flightNumber}&date=${flightDate}&station=${station}`;
         
         const response = await fetch(apiUrl, {
-          method: 'POST',
+          method: 'GET',
           headers: {
             'Content-Type': 'application/json',
           },
         });
         
         if (!response.ok) {
-          throw new Error(`Failed to select flight: ${response.status}`);
+          throw new Error(`Failed to fetch flight details: ${response.status}`);
         }
         
         const data = await response.json();
-        addNotification('success', 'Flight selected', `Flight ${flightNumber} for ${flightDate} is now active`);
-        console.log('Flight selection result:', data);
+        
+        // Store flight details
+        setFlightDetails(data);
+        
+        addNotification('success', 'Flight loaded', `Flight ${flightNumber} for ${flightDate} - ${data.totalPassengers} passengers, ${data.disembarkingPassengerCount} disembarking`);
+        console.log('Flight details:', data);
+        
+        // Switch to camera view
+        setCurrentView('camera');
       } catch (error) {
-        console.error('Error selecting flight:', error);
-        addNotification('error', 'Failed to select flight', 'Could not process flight selection');
+        console.error('Error fetching flight details:', error);
+        addNotification('error', 'Failed to load flight', 'Could not fetch flight details');
+      } finally {
+        setIsLoadingFlights(false);
       }
     }
-  }, [station, flightNumber, flightDate]);
+  };
 
   // Effect to fetch flights when station and date change
   useEffect(() => {
@@ -862,11 +874,6 @@ export default function MobileScanner() {
       fetchFlightNumbers(station, flightDate);
     }
   }, [station, flightDate]);
-
-  // Effect to call API when all three are selected
-  useEffect(() => {
-    handleFlightSelection();
-  }, [handleFlightSelection]);
 
   // Send image to API for scanning
   const scanBoardingPassAPI = async (imageBlob: Blob): Promise<any> => {
@@ -1219,75 +1226,119 @@ export default function MobileScanner() {
       
       <main className="flex-1 flex items-center justify-center px-2 sm:px-4 py-4 sm:py-8">
         <div className="bg-white rounded-xl sm:rounded-2xl shadow-2xl w-full max-w-md sm:max-w-lg md:max-w-2xl lg:max-w-4xl p-4 sm:p-6">
-          {/* Status Bar with Station */}
-          <div className="flex items-center justify-between mb-4 text-sm text-gray-600">
-            <span>{new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-            <div className="flex items-center gap-3">
-              {/* Station Display */}
-              <div className="flex items-center gap-2 bg-[#00A651] text-white px-3 py-1.5 rounded-lg font-semibold">
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
-                </svg>
-                <span>{station}</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0" />
-                </svg>
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-                </svg>
-              </div>
-            </div>
-          </div>
+          {/* Flight Selection View */}
+          {currentView === 'flight-selection' && (
+            <div className="flex flex-col items-center justify-center min-h-[400px] py-8">
+              <div className="w-full max-w-md space-y-6">
+                <div className="text-center mb-8">
+                  <h2 className="text-2xl font-bold text-gray-900 mb-2">Select Flight</h2>
+                  <p className="text-sm text-gray-600">Choose your flight date and number to begin scanning</p>
+                </div>
 
-          {/* Flight Selection Filters */}
-          <div className="mb-4 sm:mb-6 grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {/* Date Picker */}
-            <div>
-              <label className="block text-xs font-semibold text-gray-700 mb-1.5">Flight Date</label>
-              <select
-                value={flightDate}
-                onChange={(e) => {
-                  setFlightDate(e.target.value);
-                  setFlightNumber(''); // Reset flight number when date changes
-                }}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#00A651] focus:border-transparent"
-              >
-                <option value="">Select Date</option>
-                {getDateOptions().map((dateOption) => (
-                  <option key={dateOption.value} value={dateOption.value}>
-                    {dateOption.label} ({dateOption.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })})
-                  </option>
-                ))}
-              </select>
-            </div>
+                {/* Station Display */}
+                <div className="flex justify-center mb-6">
+                  <div className="flex items-center gap-2 bg-[#00A651] text-white px-4 py-2 rounded-lg font-semibold">
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                    </svg>
+                    <span>Station: {station}</span>
+                  </div>
+                </div>
 
-            {/* Flight Number Dropdown */}
-            <div>
-              <label className="block text-xs font-semibold text-gray-700 mb-1.5">Flight Number</label>
-              <select
-                value={flightNumber}
-                onChange={(e) => setFlightNumber(e.target.value)}
-                disabled={!flightDate || isLoadingFlights}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#00A651] focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed"
-              >
-                <option value="">
-                  {isLoadingFlights ? 'Loading flights...' : !flightDate ? 'Select date first' : 'Select Flight'}
-                </option>
-                {flightNumbers.map((flight, index) => (
-                  <option key={index} value={flight}>
-                    {flight}
-                  </option>
-                ))}
-              </select>
+                {/* Date Picker */}
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">Flight Date</label>
+                  <select
+                    value={flightDate}
+                    onChange={(e) => {
+                      setFlightDate(e.target.value);
+                      setFlightNumber(''); // Reset flight number when date changes
+                    }}
+                    className="w-full px-4 py-3 border border-gray-300 rounded-lg text-base focus:outline-none focus:ring-2 focus:ring-[#00A651] focus:border-transparent"
+                  >
+                    <option value="">Select Date</option>
+                    {getDateOptions().map((dateOption) => (
+                      <option key={dateOption.value} value={dateOption.value}>
+                        {dateOption.label} ({dateOption.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Flight Number Dropdown */}
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">Flight Number</label>
+                  <select
+                    value={flightNumber}
+                    onChange={(e) => setFlightNumber(e.target.value)}
+                    disabled={!flightDate || isLoadingFlights}
+                    className="w-full px-4 py-3 border border-gray-300 rounded-lg text-base focus:outline-none focus:ring-2 focus:ring-[#00A651] focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed"
+                  >
+                    <option value="">
+                      {isLoadingFlights ? 'Loading flights...' : !flightDate ? 'Select date first' : 'Select Flight'}
+                    </option>
+                    {flightNumbers.map((flight, index) => (
+                      <option key={index} value={String(flight)}>
+                        {flight}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Proceed Button */}
+                <button
+                  onClick={handleFlightSelect}
+                  disabled={!flightNumber || !flightDate || isLoadingFlights}
+                  className="w-full bg-[#00A651] text-white px-6 py-3 rounded-lg font-semibold text-base hover:bg-[#008a43] transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed disabled:hover:bg-gray-300 flex items-center justify-center gap-2"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 001.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
+                  </svg>
+                  Start Scanning
+                </button>
+              </div>
             </div>
-          </div>
+          )}
 
           {/* Camera View */}
           {currentView === 'camera' && (
             <>
+              {/* Status Bar with Station and Flight Info */}
+              <div className="flex items-center justify-between mb-4 text-sm text-gray-600">
+                <div className="flex items-center gap-3">
+                  <span>{new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                  {flightDetails && (
+                    <div className="flex items-center gap-2 text-xs">
+                      <span className="font-semibold">ET{flightDetails.flightNumber}</span>
+                      <span className="text-gray-400">•</span>
+                      <span>{flightDetails.totalPassengers} Total</span>
+                      <span className="text-gray-400">•</span>
+                      <span className="text-[#00A651] font-semibold">{flightDetails.disembarkingPassengerCount} Disembarking</span>
+                    </div>
+                  )}
+                </div>
+                <div className="flex items-center gap-3">
+                  {/* Station Display */}
+                  <div className="flex items-center gap-2 bg-[#00A651] text-white px-3 py-1.5 rounded-lg font-semibold">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                    </svg>
+                    <span>{station}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0" />
+                    </svg>
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                    </svg>
+                  </div>
+                </div>
+              </div>
+
               {/* Permission Prompt Overlay */}
               {showPermissionPrompt && cameraPermission !== 'granted' && (
                 <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
