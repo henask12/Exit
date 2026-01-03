@@ -154,9 +154,9 @@ export default function MobileScanner() {
     checkCameraPermission();
   }, []);
 
-  // Auto-start camera on mount
+  // Auto-start camera on mount or when switching to camera view
   useEffect(() => {
-    if (!isScanning && !streamRef.current) {
+    if (currentView === 'camera' && !isScanning && !streamRef.current) {
       const permission = cameraPermission;
       if (permission === 'prompt' || permission === 'granted' || permission === 'checking') {
         setTimeout(() => {
@@ -168,7 +168,7 @@ export default function MobileScanner() {
         }, 500);
       }
     }
-  }, [cameraPermission]);
+  }, [cameraPermission, currentView]);
 
   // Start camera - get camera stream and assign to video element
   const startCamera = async () => {
@@ -1062,14 +1062,25 @@ export default function MobileScanner() {
 
   // Capture and scan from image - using API
   const captureAndScan = async () => {
-    if (!videoRef.current || !isScanning) {
+    if (!videoRef.current) {
+      addNotification('error', 'Camera not ready', 'Video element not available');
+      return;
+    }
+    
+    // Check if video stream exists
+    if (!streamRef.current) {
       addNotification('error', 'Camera not ready', 'Please start the camera first');
       return;
     }
     
+    // Check if video has valid dimensions (allow some time for stream to initialize)
     if (videoRef.current.videoWidth === 0 || videoRef.current.videoHeight === 0) {
-      addNotification('error', 'Camera not ready', 'Camera stream not ready yet');
-      return;
+      // Wait a bit and try again
+      await new Promise(resolve => setTimeout(resolve, 100));
+      if (videoRef.current.videoWidth === 0 || videoRef.current.videoHeight === 0) {
+        addNotification('error', 'Camera not ready', 'Camera stream not ready yet. Please wait a moment.');
+        return;
+      }
     }
     
     // Stop any active scanning
