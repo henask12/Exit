@@ -2,8 +2,7 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { auth } from '../../lib/auth';
-import { useState, useEffect } from 'react';
+import { useAuth } from '@/hooks/useAuth';
 
 interface HeaderProps {
   activeTab?: 'operations' | 'mobile-scanner' | 'integration-health' | 'settings';
@@ -11,16 +10,7 @@ interface HeaderProps {
 
 export default function Header({ activeTab = 'operations' }: HeaderProps) {
   const router = useRouter();
-  const [user, setUser] = useState<any>(null);
-
-  useEffect(() => {
-    setUser(auth.getUser());
-  }, []);
-
-  const handleLogout = () => {
-    auth.clearAuth();
-    router.push('/login');
-  };
+  const { user, logout } = useAuth();
 
   return (
     <header className="bg-[#1e3a5f] text-white px-3 sm:px-4 md:px-6 py-3 sm:py-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 sm:gap-0">
@@ -100,7 +90,7 @@ export default function Header({ activeTab = 'operations' }: HeaderProps) {
               <p className="text-xs text-blue-200">{user.station?.code || user.stationCode} • {user.role}</p>
             </div>
             <button
-              onClick={handleLogout}
+              onClick={logout}
               className="px-2 sm:px-3 py-1.5 sm:py-2 rounded-full hover:bg-blue-700 transition-colors text-xs sm:text-sm flex items-center gap-1 sm:gap-2"
               title="Logout"
             >

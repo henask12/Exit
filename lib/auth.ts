@@ -1,6 +1,6 @@
 // Auth utilities for token management and API calls
 
-const API_BASE_URL = 'https://alphaapi-et-transitpax.azurewebsites.net/api';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'https://alphaapi-et-transitpax.azurewebsites.net/api';
 
 export interface LoginResponse {
   token: string;
@@ -146,9 +146,9 @@ export const apiCall = async (
   }
 
   // Prepare headers
-  const headers: HeadersInit = {
+  const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    ...options.headers,
+    ...(options.headers as Record<string, string> || {}),
   };
 
   // Add auth header if token exists
@@ -267,7 +267,7 @@ export const authAPI = {
   },
 
   // Test authentication
-  testAuth: async (): Promise<any> => {
+  testAuth: async (): Promise<unknown> => {
     const response = await apiCall('/Auth/test-auth');
     
     if (!response.ok) {

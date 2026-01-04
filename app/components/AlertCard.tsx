@@ -1,3 +1,6 @@
+import { Card } from './ui/Card';
+import { Button } from './ui/Button';
+
 interface AlertCardProps {
   type: 'warning' | 'success' | 'error';
   code: string;
@@ -28,7 +31,7 @@ export default function AlertCard({ type, code, time, message, showResolve = fal
   const color = colors[type];
 
   return (
-    <div className={`bg-white rounded-lg shadow-sm p-4 border-l-4 ${color.border} flex items-start justify-between`}>
+    <Card className={`p-4 border-l-4 ${color.border} flex items-start justify-between`}>
       <div className="flex items-start gap-3 flex-1">
         <div className={`p-2 rounded ${color.bg}`}>
           {type === 'warning' || type === 'error' ? (
@@ -50,11 +53,11 @@ export default function AlertCard({ type, code, time, message, showResolve = fal
         </div>
       </div>
       {showResolve && (
-        <button className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium">
+        <Button className="bg-blue-600 text-white hover:bg-blue-700">
           Resolve
-        </button>
+        </Button>
       )}
-    </div>
+    </Card>
   );
 }
 

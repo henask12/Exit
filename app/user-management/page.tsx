@@ -1,24 +1,39 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import { useState } from 'react';
 import Header from '../components/Header';
 import Footer from '../components/Footer';
-import { userAPI, stationAPI, roleAPI, auth, User, Station, Role } from '../../lib/auth';
+import { Modal } from '../components/ui/Modal';
+import { Button } from '../components/ui/Button';
+import { Input } from '../components/ui/Input';
+import { LoadingSpinner } from '../components/ui/LoadingSpinner';
+import { NotificationContainer } from '../components/ui/NotificationToast';
+import { useAuth } from '@/hooks/useAuth';
+import { useNotifications } from '@/hooks/useNotifications';
+import { useUsers, useCreateUser, useUpdateUser, useDeleteUser } from '@/hooks/api/useUsers';
+import { useStations } from '@/hooks/api/useStations';
+import { useRoles } from '@/hooks/api/useRoles';
+import { User } from '@/lib/auth';
+import { createUserSchema, updateUserSchema } from '@/lib/validations';
+import { useFormValidation } from '@/hooks/useFormValidation';
 
 export default function UserManagement() {
-  const router = useRouter();
-  const [users, setUsers] = useState<User[]>([]);
-  const [stations, setStations] = useState<Station[]>([]);
-  const [roles, setRoles] = useState<Role[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState('');
+  const { isChecking } = useAuth();
+  const { notifications, addNotification, removeNotification } = useNotifications();
+  const { data: users = [], isLoading: isLoadingUsers } = useUsers();
+  const { data: stations = [] } = useStations();
+  const { data: roles = [] } = useRoles();
+  
+  const createUser = useCreateUser();
+  const updateUser = useUpdateUser();
+  const deleteUser = useDeleteUser();
+
+  const createValidation = useFormValidation(createUserSchema);
+  const updateValidation = useFormValidation(updateUserSchema);
+
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
-  const [notifications, setNotifications] = useState<Array<{id: string, type: 'success' | 'error', message: string}>>([]);
-
-  // Form state
   const [formData, setFormData] = useState({
     employeeId: '',
     email: '',
@@ -30,94 +45,68 @@ export default function UserManagement() {
     isActive: true,
   });
 
-  useEffect(() => {
-    if (!auth.isAuthenticated()) {
-      router.push('/login');
-      return;
-    }
-    loadData();
-  }, [router]);
-
-  const loadData = async () => {
-    try {
-      setIsLoading(true);
-      const [usersData, stationsData, rolesData] = await Promise.all([
-        userAPI.getAll(),
-        stationAPI.getAll(),
-        roleAPI.getAll(),
-      ]);
-      setUsers(usersData);
-      setStations(stationsData.filter((s: Station) => s.isActive));
-      setRoles(rolesData.filter((r: Role) => r.isActive));
-    } catch (err: any) {
-      setError(err.message || 'Failed to load data');
-      if (err.message?.includes('Unauthorized')) {
-        router.push('/login');
-      }
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const addNotification = (type: 'success' | 'error', message: string) => {
-    const id = Date.now().toString();
-    setNotifications(prev => [...prev, { id, type, message }]);
-    setTimeout(() => {
-      setNotifications(prev => prev.filter(n => n.id !== id));
-    }, 5000);
-  };
+  if (isChecking) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <LoadingSpinner size="lg" />
+      </div>
+    );
+  }
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!createValidation.validate(formData)) {
+      addNotification('error', 'Please fix the form errors');
+      return;
+    }
     try {
-      await userAPI.create({
-        employeeId: formData.employeeId,
-        email: formData.email,
-        password: formData.password,
-        firstName: formData.firstName,
-        lastName: formData.lastName,
-        stationId: formData.stationId,
-        roleId: formData.roleId,
-      });
+      await createUser.mutateAsync(formData);
       addNotification('success', 'User created successfully');
       setShowCreateModal(false);
       resetForm();
-      loadData();
-    } catch (err: any) {
-      addNotification('error', err.message || 'Failed to create user');
+      createValidation.clearErrors();
+    } catch (error: any) {
+      addNotification('error', error.message || 'Failed to create user');
     }
   };
 
   const handleUpdate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedUser) return;
+    const updateData = {
+      email: formData.email,
+      firstName: formData.firstName,
+      lastName: formData.lastName,
+      stationId: formData.stationId,
+      roleId: formData.roleId,
+      isActive: formData.isActive,
+    };
+    if (!updateValidation.validate(updateData)) {
+      addNotification('error', 'Please fix the form errors');
+      return;
+    }
     try {
-      await userAPI.update(selectedUser.id, {
-        email: formData.email,
-        firstName: formData.firstName,
-        lastName: formData.lastName,
-        stationId: formData.stationId,
-        roleId: formData.roleId,
-        isActive: formData.isActive,
+      await updateUser.mutateAsync({
+        id: selectedUser.id,
+        data: updateData,
       });
       addNotification('success', 'User updated successfully');
       setShowEditModal(false);
       setSelectedUser(null);
       resetForm();
-      loadData();
-    } catch (err: any) {
-      addNotification('error', err.message || 'Failed to update user');
+      updateValidation.clearErrors();
+    } catch (error: any) {
+      addNotification('error', error.message || 'Failed to update user');
     }
   };
 
   const handleDelete = async (id: number) => {
     if (!confirm('Are you sure you want to deactivate this user?')) return;
     try {
-      await userAPI.delete(id);
+      await deleteUser.mutateAsync(id);
       addNotification('success', 'User deactivated successfully');
-      loadData();
-    } catch (err: any) {
-      addNotification('error', err.message || 'Failed to deactivate user');
+    } catch (error: any) {
+      addNotification('error', error.message || 'Failed to deactivate user');
     }
   };
 
@@ -149,45 +138,25 @@ export default function UserManagement() {
     });
   };
 
+  const activeStations = stations.filter((s) => s.isActive);
+  const activeRoles = roles.filter((r) => r.isActive);
+
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
       <Header activeTab="settings" />
-      
-      {/* Notifications */}
-      <div className="fixed top-20 right-4 z-50 space-y-2 max-w-sm w-full sm:max-w-md">
-        {notifications.map((notification) => (
-          <div
-            key={notification.id}
-            className={`${notification.type === 'success' ? 'bg-green-500' : 'bg-red-500'} text-white rounded-lg shadow-lg p-4 animate-slide-in-right`}
-          >
-            <p className="font-semibold text-sm">{notification.message}</p>
-          </div>
-        ))}
-      </div>
+      <NotificationContainer notifications={notifications} onRemove={removeNotification} />
 
       <main className="flex-1 px-3 sm:px-4 md:px-6 py-4 sm:py-6 md:py-8">
         <div className="flex items-center justify-between mb-4 sm:mb-6">
           <h2 className="text-xl sm:text-2xl font-bold text-gray-900">User Management</h2>
-          <button
-            onClick={() => {
-              resetForm();
-              setShowCreateModal(true);
-            }}
-            className="px-4 py-2 bg-[#00A651] text-white rounded-lg hover:bg-[#008a43] transition-colors font-semibold text-sm sm:text-base"
-          >
+          <Button onClick={() => { resetForm(); setShowCreateModal(true); }}>
             + Add User
-          </button>
+          </Button>
         </div>
 
-        {error && (
-          <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-4">
-            <p className="text-red-800">{error}</p>
-          </div>
-        )}
-
-        {isLoading ? (
+        {isLoadingUsers ? (
           <div className="bg-white rounded-lg shadow-sm p-8 text-center">
-            <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-[#00A651]"></div>
+            <LoadingSpinner size="lg" />
             <p className="mt-4 text-gray-600">Loading users...</p>
           </div>
         ) : (
@@ -220,16 +189,10 @@ export default function UserManagement() {
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2">
-                          <button
-                            onClick={() => openEditModal(user)}
-                            className="text-blue-600 hover:text-blue-800 text-sm font-medium"
-                          >
+                          <button onClick={() => openEditModal(user)} className="text-blue-600 hover:text-blue-800 text-sm font-medium">
                             Edit
                           </button>
-                          <button
-                            onClick={() => handleDelete(user.id)}
-                            className="text-red-600 hover:text-red-800 text-sm font-medium"
-                          >
+                          <button onClick={() => handleDelete(user.id)} className="text-red-600 hover:text-red-800 text-sm font-medium">
                             Deactivate
                           </button>
                         </div>
@@ -243,228 +206,235 @@ export default function UserManagement() {
         )}
       </main>
 
-      {/* Create User Modal */}
-      {showCreateModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg p-6 max-w-md w-full max-h-[90vh] overflow-y-auto">
-            <h3 className="text-xl font-bold text-gray-900 mb-4">Create New User</h3>
-            <form onSubmit={handleCreate} className="space-y-4">
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-1">Employee ID</label>
-                <input
-                  type="text"
-                  value={formData.employeeId}
-                  onChange={(e) => setFormData({ ...formData, employeeId: e.target.value })}
-                  required
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#00A651]"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-1">Email</label>
-                <input
-                  type="email"
-                  value={formData.email}
-                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                  required
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#00A651]"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-1">Password</label>
-                <input
-                  type="password"
-                  value={formData.password}
-                  onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                  required
-                  minLength={8}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#00A651]"
-                />
-                <p className="text-xs text-gray-500 mt-1">Minimum 8 characters</p>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-1">First Name</label>
-                  <input
-                    type="text"
-                    value={formData.firstName}
-                    onChange={(e) => setFormData({ ...formData, firstName: e.target.value })}
-                    required
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#00A651]"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-1">Last Name</label>
-                  <input
-                    type="text"
-                    value={formData.lastName}
-                    onChange={(e) => setFormData({ ...formData, lastName: e.target.value })}
-                    required
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#00A651]"
-                  />
-                </div>
-              </div>
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-1">Station</label>
-                <select
-                  value={formData.stationId}
-                  onChange={(e) => setFormData({ ...formData, stationId: Number(e.target.value) })}
-                  required
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#00A651]"
-                >
-                  <option value={0}>Select Station</option>
-                  {stations.map((station) => (
-                    <option key={station.id} value={station.id}>{station.code} - {station.name}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-1">Role</label>
-                <select
-                  value={formData.roleId}
-                  onChange={(e) => setFormData({ ...formData, roleId: Number(e.target.value) })}
-                  required
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#00A651]"
-                >
-                  <option value={0}>Select Role</option>
-                  {roles.map((role) => (
-                    <option key={role.id} value={role.id}>{role.name}</option>
-                  ))}
-                </select>
-              </div>
-              <div className="flex gap-3 pt-4">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowCreateModal(false);
-                    resetForm();
-                  }}
-                  className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="flex-1 px-4 py-2 bg-[#00A651] text-white rounded-lg hover:bg-[#008a43]"
-                >
-                  Create User
-                </button>
-              </div>
-            </form>
+      <Modal
+        isOpen={showCreateModal}
+        onClose={() => { setShowCreateModal(false); resetForm(); }}
+        title="Create New User"
+        footer={
+          <div className="flex gap-3">
+            <Button variant="outline" onClick={() => { setShowCreateModal(false); resetForm(); }}>
+              Cancel
+            </Button>
+            <Button onClick={handleCreate} disabled={createUser.isPending}>
+              {createUser.isPending ? 'Creating...' : 'Create User'}
+            </Button>
           </div>
-        </div>
-      )}
+        }
+      >
+        <form onSubmit={handleCreate} className="space-y-4">
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 mb-1">Employee ID</label>
+            <Input
+              value={formData.employeeId}
+              onChange={(e) => setFormData({ ...formData, employeeId: e.target.value })}
+              required
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 mb-1">Email</label>
+            <Input
+              type="email"
+              value={formData.email}
+              onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+              required
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 mb-1">Password</label>
+            <Input
+              type="password"
+              value={formData.password}
+              onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+              required
+              minLength={8}
+            />
+            <p className="text-xs text-gray-500 mt-1">Minimum 8 characters</p>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-1">First Name</label>
+              <Input
+                value={formData.firstName}
+                onChange={(e) => setFormData({ ...formData, firstName: e.target.value })}
+                required
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-1">Last Name</label>
+              <Input
+                value={formData.lastName}
+                onChange={(e) => setFormData({ ...formData, lastName: e.target.value })}
+                required
+              />
+            </div>
+          </div>
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 mb-1">Station</label>
+            <select
+              value={formData.stationId}
+              onChange={(e) => setFormData({ ...formData, stationId: Number(e.target.value) })}
+              required
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#00A651]"
+            >
+              <option value={0}>Select Station</option>
+              {activeStations.map((station) => (
+                <option key={station.id} value={station.id}>
+                  {station.code} - {station.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 mb-1">Role</label>
+            <select
+              value={formData.roleId}
+              onChange={(e) => setFormData({ ...formData, roleId: Number(e.target.value) })}
+              required
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#00A651]"
+            >
+              <option value={0}>Select Role</option>
+              {activeRoles.map((role) => (
+                <option key={role.id} value={role.id}>
+                  {role.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        </form>
+      </Modal>
 
-      {/* Edit User Modal */}
-      {showEditModal && selectedUser && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg p-6 max-w-md w-full max-h-[90vh] overflow-y-auto">
-            <h3 className="text-xl font-bold text-gray-900 mb-4">Edit User</h3>
-            <form onSubmit={handleUpdate} className="space-y-4">
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-1">Employee ID</label>
-                <input
-                  type="text"
-                  value={formData.employeeId}
-                  disabled
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-100"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-1">Email</label>
-                <input
-                  type="email"
-                  value={formData.email}
-                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                  required
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#00A651]"
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-1">First Name</label>
-                  <input
-                    type="text"
-                    value={formData.firstName}
-                    onChange={(e) => setFormData({ ...formData, firstName: e.target.value })}
-                    required
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#00A651]"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-1">Last Name</label>
-                  <input
-                    type="text"
-                    value={formData.lastName}
-                    onChange={(e) => setFormData({ ...formData, lastName: e.target.value })}
-                    required
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#00A651]"
-                  />
-                </div>
-              </div>
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-1">Station</label>
-                <select
-                  value={formData.stationId}
-                  onChange={(e) => setFormData({ ...formData, stationId: Number(e.target.value) })}
-                  required
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#00A651]"
-                >
-                  <option value={0}>Select Station</option>
-                  {stations.map((station) => (
-                    <option key={station.id} value={station.id}>{station.code} - {station.name}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-1">Role</label>
-                <select
-                  value={formData.roleId}
-                  onChange={(e) => setFormData({ ...formData, roleId: Number(e.target.value) })}
-                  required
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#00A651]"
-                >
-                  <option value={0}>Select Role</option>
-                  {roles.map((role) => (
-                    <option key={role.id} value={role.id}>{role.name}</option>
-                  ))}
-                </select>
-              </div>
-              <div className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  id="isActive"
-                  checked={formData.isActive}
-                  onChange={(e) => setFormData({ ...formData, isActive: e.target.checked })}
-                  className="w-4 h-4 text-[#00A651] rounded focus:ring-[#00A651]"
-                />
-                <label htmlFor="isActive" className="text-sm font-semibold text-gray-700">Active</label>
-              </div>
-              <div className="flex gap-3 pt-4">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowEditModal(false);
-                    setSelectedUser(null);
-                    resetForm();
-                  }}
-                  className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="flex-1 px-4 py-2 bg-[#00A651] text-white rounded-lg hover:bg-[#008a43]"
-                >
-                  Update User
-                </button>
-              </div>
-            </form>
+      <Modal
+        isOpen={showEditModal}
+        onClose={() => { setShowEditModal(false); setSelectedUser(null); resetForm(); }}
+        title="Edit User"
+        footer={
+          <div className="flex gap-3">
+            <Button variant="outline" onClick={() => { setShowEditModal(false); setSelectedUser(null); resetForm(); }}>
+              Cancel
+            </Button>
+            <Button onClick={handleUpdate} disabled={updateUser.isPending}>
+              {updateUser.isPending ? 'Updating...' : 'Update User'}
+            </Button>
           </div>
-        </div>
-      )}
+        }
+      >
+        <form onSubmit={handleUpdate} className="space-y-4">
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 mb-1">Employee ID</label>
+            <Input value={formData.employeeId} disabled className="bg-gray-100" />
+          </div>
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 mb-1">Email</label>
+            <Input
+              type="email"
+              value={formData.email}
+              onChange={(e) => {
+                setFormData({ ...formData, email: e.target.value });
+                updateValidation.validateField('email', e.target.value);
+              }}
+              onBlur={() => updateValidation.setFieldTouched('email')}
+              required
+            />
+            {updateValidation.getFieldError('email') && (
+              <p className="text-xs text-red-600 mt-1">{updateValidation.getFieldError('email')}</p>
+            )}
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-1">First Name</label>
+              <Input
+                value={formData.firstName}
+                onChange={(e) => {
+                  setFormData({ ...formData, firstName: e.target.value });
+                  updateValidation.validateField('firstName', e.target.value);
+                }}
+                onBlur={() => updateValidation.setFieldTouched('firstName')}
+                required
+              />
+              {updateValidation.getFieldError('firstName') && (
+                <p className="text-xs text-red-600 mt-1">{updateValidation.getFieldError('firstName')}</p>
+              )}
+            </div>
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-1">Last Name</label>
+              <Input
+                value={formData.lastName}
+                onChange={(e) => {
+                  setFormData({ ...formData, lastName: e.target.value });
+                  updateValidation.validateField('lastName', e.target.value);
+                }}
+                onBlur={() => updateValidation.setFieldTouched('lastName')}
+                required
+              />
+              {updateValidation.getFieldError('lastName') && (
+                <p className="text-xs text-red-600 mt-1">{updateValidation.getFieldError('lastName')}</p>
+              )}
+            </div>
+          </div>
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 mb-1">Station</label>
+            <select
+              value={formData.stationId}
+              onChange={(e) => {
+                setFormData({ ...formData, stationId: Number(e.target.value) });
+                updateValidation.validateField('stationId', Number(e.target.value));
+              }}
+              onBlur={() => updateValidation.setFieldTouched('stationId')}
+              required
+              className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-[#00A651] ${
+                updateValidation.getFieldError('stationId') ? 'border-red-300' : 'border-gray-300'
+              }`}
+            >
+              <option value={0}>Select Station</option>
+              {activeStations.map((station) => (
+                <option key={station.id} value={station.id}>
+                  {station.code} - {station.name}
+                </option>
+              ))}
+            </select>
+            {updateValidation.getFieldError('stationId') && (
+              <p className="text-xs text-red-600 mt-1">{updateValidation.getFieldError('stationId')}</p>
+            )}
+          </div>
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 mb-1">Role</label>
+            <select
+              value={formData.roleId}
+              onChange={(e) => {
+                setFormData({ ...formData, roleId: Number(e.target.value) });
+                updateValidation.validateField('roleId', Number(e.target.value));
+              }}
+              onBlur={() => updateValidation.setFieldTouched('roleId')}
+              required
+              className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-[#00A651] ${
+                updateValidation.getFieldError('roleId') ? 'border-red-300' : 'border-gray-300'
+              }`}
+            >
+              <option value={0}>Select Role</option>
+              {activeRoles.map((role) => (
+                <option key={role.id} value={role.id}>
+                  {role.name}
+                </option>
+              ))}
+            </select>
+            {updateValidation.getFieldError('roleId') && (
+              <p className="text-xs text-red-600 mt-1">{updateValidation.getFieldError('roleId')}</p>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              id="isActive"
+              checked={formData.isActive}
+              onChange={(e) => setFormData({ ...formData, isActive: e.target.checked })}
+              className="w-4 h-4 text-[#00A651] rounded focus:ring-[#00A651]"
+            />
+            <label htmlFor="isActive" className="text-sm font-semibold text-gray-700">Active</label>
+          </div>
+        </form>
+      </Modal>
 
       <Footer activeTab="flight-monitor" />
     </div>
   );
 }
-

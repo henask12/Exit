@@ -147,12 +147,7 @@ export default function LoginPage() {
           </button>
         </form>
 
-        {/* Demo Credentials Info */}
-        <div className="mt-6 pt-6 border-t border-gray-200">
-          <p className="text-xs text-gray-500 text-center">
-            Demo Account: Employee ID <span className="font-semibold">00028804</span>
-          </p>
-        </div>
+       
       </div>
     </div>
   );
