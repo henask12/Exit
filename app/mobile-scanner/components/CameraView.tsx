@@ -12,6 +12,8 @@ interface CameraViewProps {
   scanStatus: 'loading' | 'success' | 'error' | null;
   recentScans: any[];
   onRemoveScan: (index: number) => void;
+  isScanning?: boolean;
+  cameraPermission?: 'prompt' | 'granted' | 'denied' | 'checking';
 }
 
 export function CameraView({
@@ -24,6 +26,8 @@ export function CameraView({
   scanStatus,
   recentScans,
   onRemoveScan,
+  isScanning = false,
+  cameraPermission = 'checking',
 }: CameraViewProps) {
   const remainingPassengers = flightDetails?.disembarkingPassengers?.filter((p: any) => {
     const matchKey = `${p.pnrLocator || ''}_${p.seat || ''}`.toUpperCase();
@@ -130,6 +134,41 @@ export function CameraView({
           style={{ width: '100%', height: '100%', objectFit: 'cover' }}
           className="w-full h-full object-cover"
         />
+        
+        {/* Camera Status Overlay */}
+        {!isScanning && cameraPermission === 'checking' && (
+          <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-75 z-20">
+            <div className="text-center text-white">
+              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white mx-auto mb-3"></div>
+              <p className="text-lg font-semibold">Starting Camera...</p>
+            </div>
+          </div>
+        )}
+        
+        {!isScanning && cameraPermission === 'denied' && (
+          <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-75 z-20">
+            <div className="text-center text-white p-4">
+              <svg className="w-16 h-16 mx-auto mb-4 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
+              </svg>
+              <p className="text-lg font-semibold mb-2">Camera Access Denied</p>
+              <p className="text-sm text-gray-300 mb-4">Please allow camera access in your browser settings</p>
+              <button
+                onClick={() => window.location.reload()}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+              >
+                Reload Page
+              </button>
+            </div>
+          </div>
+        )}
+        
+        {isScanning && !scanStatus && (
+          <div className="absolute top-2 right-2 bg-green-500 text-white px-3 py-1 rounded-full text-xs font-semibold flex items-center gap-2 z-10">
+            <div className="w-2 h-2 bg-white rounded-full animate-pulse"></div>
+            Camera Active
+          </div>
+        )}
         
         {/* Scan Status Overlay */}
         {scanStatus && (

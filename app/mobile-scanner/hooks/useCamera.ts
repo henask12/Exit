@@ -103,6 +103,22 @@ export function useCamera() {
           }
           
           const video = videoRef.current;
+          let resolved = false;
+          
+          const cleanup = () => {
+            video.removeEventListener('loadedmetadata', onLoadedMetadata);
+            video.removeEventListener('canplay', onCanPlay);
+            video.removeEventListener('error', onError);
+          };
+          
+          const doResolve = () => {
+            if (!resolved) {
+              resolved = true;
+              cleanup();
+              clearTimeout(timeoutId);
+              resolve();
+            }
+          };
           
           const onLoadedMetadata = () => {
             console.log('Video metadata loaded', {
@@ -110,27 +126,49 @@ export function useCamera() {
               videoHeight: video.videoHeight,
               readyState: video.readyState
             });
-            video.removeEventListener('loadedmetadata', onLoadedMetadata);
-            video.removeEventListener('error', onError);
-            resolve();
+            
+            // Ensure video plays
+            video.play().catch((playError) => {
+              console.warn('Video play() failed, but continuing:', playError);
+            });
+            
+            doResolve();
+          };
+          
+          // Also listen for canplay event as backup
+          const onCanPlay = () => {
+            console.log('Video can play');
+            video.play().catch((playError) => {
+              console.warn('Video play() failed:', playError);
+            });
+            doResolve();
           };
           
           const onError = (e: Event) => {
             console.error('Video element error:', e);
-            video.removeEventListener('loadedmetadata', onLoadedMetadata);
-            video.removeEventListener('error', onError);
-            reject(new Error('Video element failed to load'));
+            if (!resolved) {
+              resolved = true;
+              cleanup();
+              clearTimeout(timeoutId);
+              reject(new Error('Video element failed to load'));
+            }
           };
           
           video.addEventListener('loadedmetadata', onLoadedMetadata);
+          video.addEventListener('canplay', onCanPlay);
           video.addEventListener('error', onError);
           
           // Timeout after 5 seconds
-          setTimeout(() => {
-            video.removeEventListener('loadedmetadata', onLoadedMetadata);
-            video.removeEventListener('error', onError);
-            if (video.readyState < 2) {
-              reject(new Error('Video loading timeout'));
+          const timeoutId = setTimeout(() => {
+            if (!resolved) {
+              if (video.readyState >= 2) {
+                // Video is ready, resolve
+                doResolve();
+              } else {
+                resolved = true;
+                cleanup();
+                reject(new Error('Video loading timeout'));
+              }
             }
           }, 5000);
         });

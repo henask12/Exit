@@ -215,6 +215,8 @@ export default function MobileScanner() {
                 scanStatus={scanning.scanStatus}
                 recentScans={scanning.recentScans}
                 onRemoveScan={scanning.removeScan}
+                isScanning={camera.isScanning}
+                cameraPermission={camera.cameraPermission}
               />
               
               {/* Hidden file input for native camera */}
