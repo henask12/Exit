@@ -1,10 +1,27 @@
+'use client';
+
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { auth } from '../../lib/auth';
+import { useState, useEffect } from 'react';
 
 interface HeaderProps {
   activeTab?: 'operations' | 'mobile-scanner' | 'integration-health' | 'settings';
 }
 
 export default function Header({ activeTab = 'operations' }: HeaderProps) {
+  const router = useRouter();
+  const [user, setUser] = useState<any>(null);
+
+  useEffect(() => {
+    setUser(auth.getUser());
+  }, []);
+
+  const handleLogout = () => {
+    auth.clearAuth();
+    router.push('/login');
+  };
+
   return (
     <header className="bg-[#1e3a5f] text-white px-3 sm:px-4 md:px-6 py-3 sm:py-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 sm:gap-0">
       <div className="flex items-center gap-2 sm:gap-3">
@@ -18,7 +35,8 @@ export default function Header({ activeTab = 'operations' }: HeaderProps) {
           <p className="text-xs sm:text-sm text-blue-200 hidden sm:block">Passenger Verification System</p>
         </div>
       </div>
-      <nav className="flex items-center gap-1 sm:gap-2 md:gap-4 flex-wrap">
+      <div className="flex items-center gap-3 sm:gap-4">
+        <nav className="flex items-center gap-1 sm:gap-2 md:gap-4 flex-wrap">
         <Link 
           href="/" 
           className={`px-2 sm:px-3 md:px-4 py-1.5 sm:py-2 rounded-full transition-colors text-xs sm:text-sm ${
@@ -72,7 +90,28 @@ export default function Header({ activeTab = 'operations' }: HeaderProps) {
             <span className="hidden sm:inline">Settings</span>
           </div>
         </Link>
-      </nav>
+        </nav>
+        
+        {/* User Info and Logout */}
+        {user && (
+          <div className="flex items-center gap-2 sm:gap-3 pl-2 sm:pl-4 border-l border-blue-600">
+            <div className="hidden sm:block text-right">
+              <p className="text-xs sm:text-sm font-semibold">{user.firstName} {user.lastName}</p>
+              <p className="text-xs text-blue-200">{user.station?.code || user.stationCode} • {user.role}</p>
+            </div>
+            <button
+              onClick={handleLogout}
+              className="px-2 sm:px-3 py-1.5 sm:py-2 rounded-full hover:bg-blue-700 transition-colors text-xs sm:text-sm flex items-center gap-1 sm:gap-2"
+              title="Logout"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+              </svg>
+              <span className="hidden sm:inline">Logout</span>
+            </button>
+          </div>
+        )}
+      </div>
     </header>
   );
 }

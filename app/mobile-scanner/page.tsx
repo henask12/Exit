@@ -1,14 +1,17 @@
 'use client';
 
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
 import Header from '../components/Header';
 import { BrowserMultiFormatReader } from '@zxing/browser';
 import { NotFoundException, DecodeHintType, BarcodeFormat } from '@zxing/library';
 import { createWorker } from 'tesseract.js';
+import { apiCall, auth, API_BASE_URL } from '../../lib/auth';
 
 type ViewMode = 'flight-selection' | 'camera';
 
 export default function MobileScanner() {
+  const router = useRouter();
   const [currentView, setCurrentView] = useState<ViewMode>('flight-selection');
   const [isScanning, setIsScanning] = useState(false);
   const [scanResult, setScanResult] = useState<any>(null);
@@ -19,7 +22,7 @@ export default function MobileScanner() {
   const [apiConnectionError, setApiConnectionError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [scanStatus, setScanStatus] = useState<'loading' | 'success' | 'error' | null>(null);
-  const [station, setStation] = useState<string>('GVA');
+  const [station, setStation] = useState<string>('');
   const [flightNumber, setFlightNumber] = useState<string>('');
   const [flightDate, setFlightDate] = useState<string>('');
   const [flightNumbers, setFlightNumbers] = useState<Array<number>>([]);
@@ -95,6 +98,20 @@ export default function MobileScanner() {
       }
     };
   }, []);
+
+  // Check authentication on mount and get station from user
+  useEffect(() => {
+    if (!auth.isAuthenticated()) {
+      router.push('/login');
+      return;
+    }
+    
+    // Get station from user data
+    const user = auth.getUser();
+    if (user && user.station) {
+      setStation(user.station.code);
+    }
+  }, [router]);
 
   // Add notification
   const addNotification = (type: 'success' | 'error' | 'warning' | 'info', message: string, details?: string) => {
@@ -799,13 +816,8 @@ export default function MobileScanner() {
     
     try {
       setIsLoadingFlights(true);
-      const apiUrl = `https://alphaapi-et-transitpax.azurewebsites.net/api/Flight/numbers?station=${station}&flightDate=${flightDate}`;
-      
-      const response = await fetch(apiUrl, {
+      const response = await apiCall(`/Flight/numbers?station=${station}&flightDate=${flightDate}`, {
         method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
       });
       
       if (!response.ok) {
@@ -823,9 +835,13 @@ export default function MobileScanner() {
         flights = data.flightNumbers.map((item: any) => typeof item === 'number' ? item : Number(item));
       }
       setFlightNumbers(flights);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error fetching flight numbers:', error);
-      addNotification('error', 'Failed to load flights', 'Could not fetch flight numbers from API');
+      if (error.message?.includes('Unauthorized')) {
+        router.push('/login');
+      } else {
+        addNotification('error', 'Failed to load flights', error.message || 'Could not fetch flight numbers from API');
+      }
       setFlightNumbers([]);
     } finally {
       setIsLoadingFlights(false);
@@ -838,13 +854,8 @@ export default function MobileScanner() {
       try {
         setIsLoadingFlights(true);
         // Call API to get flight details
-        const apiUrl = `https://alphaapi-et-transitpax.azurewebsites.net/api/Flight/details?flightNumber=${flightNumber}&date=${flightDate}&station=${station}`;
-        
-        const response = await fetch(apiUrl, {
+        const response = await apiCall(`/Flight/details?flightNumber=${flightNumber}&date=${flightDate}&station=${station}`, {
           method: 'GET',
-          headers: {
-            'Content-Type': 'application/json',
-          },
         });
         
         if (!response.ok) {
@@ -862,9 +873,13 @@ export default function MobileScanner() {
         
         // Switch to camera view
         setCurrentView('camera');
-      } catch (error) {
+      } catch (error: any) {
         console.error('Error fetching flight details:', error);
-        addNotification('error', 'Failed to load flight', 'Could not fetch flight details');
+        if (error.message?.includes('Unauthorized')) {
+          router.push('/login');
+        } else {
+          addNotification('error', 'Failed to load flight', error.message || 'Could not fetch flight details');
+        }
       } finally {
         setIsLoadingFlights(false);
       }
@@ -881,24 +896,20 @@ export default function MobileScanner() {
   // Send image to API for scanning
   const scanBoardingPassAPI = async (imageBlob: Blob): Promise<any> => {
     try {
-      
       const formData = new FormData();
       formData.append('file', imageBlob, 'boarding-pass.jpg');
-      
-      const apiUrl = 'https://alphaapi-et-transitpax.azurewebsites.net/api/BoardingPass/scan';
 
-      console.log('🌐 Making API request to:', apiUrl, {
+      console.log('🌐 Making API request to:', `${API_BASE_URL}/BoardingPass/scan`, {
         method: 'POST',
         imageSize: imageBlob.size,
         imageType: imageBlob.type,
         timestamp: new Date().toISOString()
       });
       
-      
-      const response = await fetch(apiUrl, {
+      // Use apiCall with FormData (it handles Content-Type automatically)
+      const response = await apiCall('/BoardingPass/scan', {
         method: 'POST',
         body: formData,
-        // Note: CORS must be enabled on the API server
       });
       
       console.log('📡 API response status:', response.status, response.statusText);
@@ -917,7 +928,11 @@ export default function MobileScanner() {
       
       // Determine error type and set appropriate message
       let errorMessage = 'Unknown error';
-      if (error.message && error.message.includes('Failed to fetch')) {
+      if (error.message && error.message.includes('Unauthorized')) {
+        router.push('/login');
+        errorMessage = 'Session expired. Please login again.';
+        setApiConnectionError('Authentication required');
+      } else if (error.message && error.message.includes('Failed to fetch')) {
         errorMessage = 'Cannot connect to API server. Please check:\n- API server is running\n- CORS is enabled on the API\n- Network connectivity';
         setApiConnectionError('Connection failed - API server may be unreachable');
       } else if (error.message && error.message.includes('NetworkError')) {
@@ -1309,15 +1324,17 @@ export default function MobileScanner() {
                 </div>
 
                 {/* Station Display */}
-                <div className="flex justify-center mb-6">
-                  <div className="flex items-center gap-2 bg-[#00A651] text-white px-4 py-2 rounded-lg font-semibold">
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
-                    </svg>
-                    <span>Station: {station}</span>
+                {station && (
+                  <div className="flex justify-center mb-6">
+                    <div className="flex items-center gap-2 bg-[#00A651] text-white px-4 py-2 rounded-lg font-semibold">
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                      </svg>
+                      <span>Station: {station}</span>
+                    </div>
                   </div>
-                </div>
+                )}
 
                 {/* Date Picker */}
                 <div>
