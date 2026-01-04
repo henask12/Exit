@@ -47,45 +47,124 @@ export function useCamera() {
   }, []);
 
   const startCamera = useCallback(async () => {
-    if (!videoRef.current || !codeReaderRef.current) {
-      console.error('Video element or code reader not initialized');
+    if (!videoRef.current) {
+      console.error('Video element not initialized');
       return;
+    }
+
+    // Stop any existing stream first
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
     }
 
     try {
       setCameraPermission('checking');
       
-      const constraints: MediaStreamConstraints = {
-        video: {
-          deviceId: selectedDeviceIdRef.current ? { exact: selectedDeviceIdRef.current } : undefined,
-          facingMode: 'environment',
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-        },
-      };
+      // Try with deviceId first, fallback to facingMode
+      let constraints: MediaStreamConstraints;
+      
+      if (selectedDeviceIdRef.current) {
+        constraints = {
+          video: {
+            deviceId: { exact: selectedDeviceIdRef.current },
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+          },
+        };
+      } else {
+        constraints = {
+          video: {
+            facingMode: 'environment',
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+          },
+        };
+      }
 
+      console.log('Requesting camera access with constraints:', constraints);
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      
+      if (!stream || stream.getVideoTracks().length === 0) {
+        throw new Error('No video tracks available in stream');
+      }
+      
       streamRef.current = stream;
-      videoRef.current.srcObject = stream;
+      
+      // Set the stream to video element
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        
+        // Wait for video to be ready
+        await new Promise<void>((resolve, reject) => {
+          if (!videoRef.current) {
+            reject(new Error('Video element not available'));
+            return;
+          }
+          
+          const video = videoRef.current;
+          
+          const onLoadedMetadata = () => {
+            console.log('Video metadata loaded', {
+              videoWidth: video.videoWidth,
+              videoHeight: video.videoHeight,
+              readyState: video.readyState
+            });
+            video.removeEventListener('loadedmetadata', onLoadedMetadata);
+            video.removeEventListener('error', onError);
+            resolve();
+          };
+          
+          const onError = (e: Event) => {
+            console.error('Video element error:', e);
+            video.removeEventListener('loadedmetadata', onLoadedMetadata);
+            video.removeEventListener('error', onError);
+            reject(new Error('Video element failed to load'));
+          };
+          
+          video.addEventListener('loadedmetadata', onLoadedMetadata);
+          video.addEventListener('error', onError);
+          
+          // Timeout after 5 seconds
+          setTimeout(() => {
+            video.removeEventListener('loadedmetadata', onLoadedMetadata);
+            video.removeEventListener('error', onError);
+            if (video.readyState < 2) {
+              reject(new Error('Video loading timeout'));
+            }
+          }, 5000);
+        });
+      }
       
       setCameraPermission('granted');
       setIsScanning(true);
-      
-      // Wait for video to be ready
-      await new Promise((resolve) => {
-        if (videoRef.current) {
-          videoRef.current.onloadedmetadata = () => {
-            resolve(undefined);
-          };
-        }
-      });
+      console.log('Camera started successfully');
     } catch (error: any) {
       console.error('Error starting camera:', error);
-      if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
-        setCameraPermission('denied');
-      } else {
-        setCameraPermission('denied');
+      setCameraPermission('denied');
+      setIsScanning(false);
+      
+      // Try fallback with simpler constraints
+      if (error.name !== 'NotAllowedError' && error.name !== 'PermissionDeniedError') {
+        try {
+          console.log('Trying fallback with simpler constraints');
+          const fallbackStream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: 'environment' }
+          });
+          
+          if (videoRef.current && fallbackStream) {
+            streamRef.current = fallbackStream;
+            videoRef.current.srcObject = fallbackStream;
+            setCameraPermission('granted');
+            setIsScanning(true);
+            console.log('Camera started with fallback constraints');
+            return;
+          }
+        } catch (fallbackError) {
+          console.error('Fallback camera start also failed:', fallbackError);
+        }
       }
+      
       throw error;
     }
   }, []);

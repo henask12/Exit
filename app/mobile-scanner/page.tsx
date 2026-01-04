@@ -57,10 +57,18 @@ export default function MobileScanner() {
   // Auto-start camera when switching to camera view
   useEffect(() => {
     if (currentView === 'camera' && !camera.isScanning) {
-      camera.startCamera().catch((error) => {
-        console.error('Failed to start camera:', error);
-        addNotification('error', 'Camera Error', 'Failed to start camera. Please check permissions.');
-      });
+      // Small delay to ensure video element is mounted
+      const timer = setTimeout(() => {
+        camera.startCamera().catch((error) => {
+          console.error('Failed to start camera:', error);
+          const errorMessage = error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError'
+            ? 'Camera permission denied. Please allow camera access in your browser settings.'
+            : error.message || 'Failed to start camera. Please check permissions.';
+          addNotification('error', 'Camera Error', errorMessage);
+        });
+      }, 100);
+      
+      return () => clearTimeout(timer);
     }
   }, [currentView, camera.isScanning, camera.startCamera, addNotification]);
 

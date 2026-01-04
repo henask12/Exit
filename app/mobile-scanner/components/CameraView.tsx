@@ -127,6 +127,7 @@ export function CameraView({
           autoPlay
           playsInline
           muted
+          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
           className="w-full h-full object-cover"
         />
         
