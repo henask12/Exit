@@ -15,7 +15,7 @@ export function useFlightData(station: string) {
     
     try {
       setIsLoadingFlights(true);
-      const response = await apiCall(`/Flight/numbers?station=${station}&flightDate=${flightDate}`, {
+      const response = await apiCall(`/Flight/numbers`, {
         method: 'GET',
       });
       
