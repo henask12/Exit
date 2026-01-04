@@ -85,11 +85,11 @@ export function FlightSelection({
           <select
             value={flightNumber}
             onChange={(e) => onFlightNumberChange(e.target.value)}
-            disabled={!flightDate || isLoadingFlights}
+            disabled={isLoadingFlights}
             className="w-full px-4 py-3 border border-gray-300 rounded-lg text-base focus:outline-none focus:ring-2 focus:ring-[#00A651] focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed"
           >
             <option value="">
-              {isLoadingFlights ? 'Loading flights...' : !flightDate ? 'Select date first' : 'Select Flight'}
+              {isLoadingFlights ? 'Loading flights...' : 'Select Flight'}
             </option>
             {flightNumbers.map((flight, index) => (
               <option key={index} value={String(flight)}>
@@ -101,7 +101,10 @@ export function FlightSelection({
 
         {/* Proceed Button */}
         <button
-          onClick={onStartScanning}
+          onClick={(e) => {
+            e.preventDefault();
+            onStartScanning();
+          }}
           disabled={!flightNumber || !flightDate || isLoadingFlights}
           className="w-full bg-[#00A651] text-white px-6 py-3 rounded-lg font-semibold text-base hover:bg-[#008a43] transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed disabled:hover:bg-gray-300 flex items-center justify-center gap-2"
         >

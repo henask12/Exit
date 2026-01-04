@@ -41,8 +41,11 @@ export default function MobileScanner() {
     const userData = auth.getUser();
     if (userData && userData.station) {
       setStation(userData.station.code);
+    } else if (user && user.station) {
+      // Fallback to useAuth user if available
+      setStation(user.station.code);
     }
-  }, [router]);
+  }, [router, user]);
 
   // Reset scanned passengers when flight changes
   useEffect(() => {
@@ -63,15 +66,32 @@ export default function MobileScanner() {
 
   // Handle flight selection
   const handleFlightSelect = useCallback(async () => {
-    if (station && flightData.flightNumber && flightData.flightDate) {
-      try {
-        await flightData.fetchFlightDetails(station, flightData.flightNumber, flightData.flightDate);
-        setCurrentView('camera');
-      } catch (error: any) {
-        addNotification('error', 'Failed to load flight', error.message || 'Could not fetch flight details');
-      }
+    // Get station from user if not set in state
+    const currentStation = station || user?.station?.code || '';
+    
+    if (!currentStation) {
+      addNotification('error', 'Station Missing', 'Station information is not available. Please refresh the page.');
+      return;
     }
-  }, [station, flightData, addNotification]);
+    
+    if (!flightData.flightNumber) {
+      addNotification('error', 'Flight Number Missing', 'Please select a flight number.');
+      return;
+    }
+    
+    if (!flightData.flightDate) {
+      addNotification('error', 'Flight Date Missing', 'Please select a flight date.');
+      return;
+    }
+    
+    try {
+      await flightData.fetchFlightDetails(currentStation, flightData.flightNumber, flightData.flightDate);
+      setCurrentView('camera');
+    } catch (error: any) {
+      console.error('Error in handleFlightSelect:', error);
+      addNotification('error', 'Failed to load flight', error.message || 'Could not fetch flight details');
+    }
+  }, [station, user, flightData, addNotification]);
 
   // Handle image capture and scan
   const handleCaptureAndScan = useCallback(async () => {
