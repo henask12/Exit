@@ -87,7 +87,7 @@ export default function Header({ activeTab = 'operations' }: HeaderProps) {
           <div className="flex items-center gap-2 sm:gap-3 pl-2 sm:pl-4 border-l border-blue-600">
             <div className="hidden sm:block text-right">
               <p className="text-xs sm:text-sm font-semibold">{user.firstName} {user.lastName}</p>
-              <p className="text-xs text-blue-200">{user.station?.code || user.stationCode} • {user.role}</p>
+              <p className="text-xs text-blue-200">{user.station?.code || ''} • {user.role}</p>
             </div>
             <button
               onClick={logout}

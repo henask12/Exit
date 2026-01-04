@@ -14,7 +14,7 @@ export function useFormValidation<T>(schema: ZodSchema<T>) {
       } catch (error) {
         if (error instanceof z.ZodError) {
           const fieldErrors: Record<string, string> = {};
-          error.errors.forEach((err) => {
+          error.issues.forEach((err) => {
             const path = err.path.join('.');
             fieldErrors[path] = err.message;
           });
@@ -43,7 +43,7 @@ export function useFormValidation<T>(schema: ZodSchema<T>) {
         if (error instanceof z.ZodError) {
           setErrors((prev) => ({
             ...prev,
-            [field]: error.errors[0]?.message || 'Invalid value',
+            [field]: error.issues[0]?.message || 'Invalid value',
           }));
         }
         return false;
