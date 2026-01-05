@@ -5,11 +5,11 @@ import AlertCard from './components/AlertCard';
 
 export default function Home() {
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
+    <div className="min-h-screen bg-[#f5f7fa] flex flex-col">
       <Header activeTab="operations" />
       
       <main className="flex-1 px-3 sm:px-4 md:px-6 py-4 sm:py-6 md:py-8">
-        <h2 className="text-xl sm:text-2xl font-bold text-gray-900 mb-4 sm:mb-6">Operations Control Center</h2>
+        <h2 className="text-2xl sm:text-3xl font-bold text-gray-900 mb-4 sm:mb-6">Operations Control Center</h2>
         
         {/* KPI Cards */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6 mb-6 sm:mb-8">
@@ -60,10 +60,10 @@ export default function Home() {
         </div>
 
         {/* Recent Alerts */}
-        <div className="bg-white rounded-lg shadow-sm p-4 sm:p-6">
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 sm:p-6">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-lg sm:text-xl font-semibold text-gray-900">Recent Alerts</h3>
-            <button className="text-blue-600 hover:text-blue-700 text-xs sm:text-sm font-medium">View All</button>
+            <button className="text-[#00A651] hover:text-[#008a43] text-xs sm:text-sm font-semibold transition-colors">View All</button>
           </div>
           <div className="space-y-4">
             <AlertCard

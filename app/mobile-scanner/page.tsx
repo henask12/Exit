@@ -1297,80 +1297,132 @@ export default function MobileScanner() {
         })}
       </div>
       
-      <main className="flex-1 flex items-center justify-center px-2 sm:px-4 py-4 sm:py-8">
+      <main className="flex-1 flex items-center justify-center px-2 sm:px-4 py-4 sm:py-8 bg-blue-900">
         <div className="bg-white rounded-xl sm:rounded-2xl shadow-2xl w-full max-w-md sm:max-w-lg md:max-w-2xl lg:max-w-4xl p-4 sm:p-6">
           {/* Flight Selection View */}
           {currentView === 'flight-selection' && (
-            <div className="flex flex-col items-center justify-center min-h-[400px] py-8">
+            <div className="flex flex-col items-center justify-center min-h-[500px] py-8">
               <div className="w-full max-w-md space-y-6">
-                <div className="text-center mb-8">
-                  <h2 className="text-2xl font-bold text-gray-900 mb-2">Select Flight</h2>
-                  <p className="text-sm text-gray-600">Choose your flight date and number to begin scanning</p>
+                {/* Header with Icon */}
+                <div className="text-center mb-6">
+                  <div className="w-16 h-16 bg-[#00A651] rounded-full flex items-center justify-center mx-auto mb-4 shadow-md">
+                    <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+                    </svg>
+                  </div>
+                  <h2 className="text-3xl font-bold text-gray-900 mb-2">Select Flight</h2>
+                  <p className="text-sm text-gray-600">Choose your flight date and flight number below to initiate the passenger scanning process.</p>
                 </div>
 
-                {/* Station Display */}
+                {/* Active Station Badge */}
                 <div className="flex justify-center mb-6">
-                  <div className="flex items-center gap-2 bg-[#00A651] text-white px-4 py-2 rounded-lg font-semibold">
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <div className="flex items-center gap-2 bg-green-100 text-[#00A651] px-4 py-2 rounded-lg font-semibold text-sm">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
                     </svg>
-                    <span>Station: {station}</span>
+                    <span>Active Station: {station}</span>
                   </div>
                 </div>
 
                 {/* Date Picker */}
                 <div>
                   <label className="block text-sm font-semibold text-gray-700 mb-2">Flight Date</label>
-                  <select
-                    value={flightDate}
-                    onChange={(e) => {
-                      setFlightDate(e.target.value);
-                      setFlightNumber(''); // Reset flight number when date changes
-                    }}
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg text-base focus:outline-none focus:ring-2 focus:ring-[#00A651] focus:border-transparent"
-                  >
-                    <option value="">Select Date</option>
-                    {getDateOptions().map((dateOption) => (
-                      <option key={dateOption.value} value={dateOption.value}>
-                        {dateOption.label} ({dateOption.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })})
-                      </option>
-                    ))}
-                  </select>
+                  <div className="relative">
+                    <div className="absolute left-3 top-1/2 transform -translate-y-1/2">
+                      <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                      </svg>
+                    </div>
+                    <select
+                      value={flightDate}
+                      onChange={(e) => {
+                        setFlightDate(e.target.value);
+                        setFlightNumber(''); // Reset flight number when date changes
+                      }}
+                      className="w-full pl-10 pr-10 py-3 border border-gray-300 rounded-lg text-base text-gray-700 focus:outline-none focus:ring-2 focus:ring-[#00A651] focus:border-[#00A651] appearance-none bg-white"
+                    >
+                      <option value="">Select Date</option>
+                      {getDateOptions().map((dateOption) => (
+                        <option key={dateOption.value} value={dateOption.value}>
+                          {dateOption.label} ({dateOption.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })})
+                        </option>
+                      ))}
+                    </select>
+                    <div className="absolute right-3 top-1/2 transform -translate-y-1/2 pointer-events-none">
+                      <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                      </svg>
+                    </div>
+                  </div>
                 </div>
 
                 {/* Flight Number Dropdown */}
                 <div>
                   <label className="block text-sm font-semibold text-gray-700 mb-2">Flight Number</label>
-                  <select
-                    value={flightNumber}
-                    onChange={(e) => setFlightNumber(e.target.value)}
-                    disabled={!flightDate || isLoadingFlights}
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg text-base focus:outline-none focus:ring-2 focus:ring-[#00A651] focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed"
-                  >
-                    <option value="">
-                      {isLoadingFlights ? 'Loading flights...' : !flightDate ? 'Select date first' : 'Select Flight'}
-                    </option>
-                    {flightNumbers.map((flight, index) => (
-                      <option key={index} value={String(flight)}>
-                        {flight}
+                  <div className="relative">
+                    <div className="absolute left-3 top-1/2 transform -translate-y-1/2">
+                      <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+                      </svg>
+                    </div>
+                    <select
+                      value={flightNumber}
+                      onChange={(e) => setFlightNumber(e.target.value)}
+                      disabled={!flightDate || isLoadingFlights}
+                      className="w-full pl-10 pr-10 py-3 border border-gray-300 rounded-lg text-base text-gray-700 focus:outline-none focus:ring-2 focus:ring-[#00A651] focus:border-[#00A651] appearance-none bg-white disabled:bg-gray-100 disabled:cursor-not-allowed disabled:text-gray-400"
+                    >
+                      <option value="">
+                        {isLoadingFlights ? 'Loading flights...' : !flightDate ? 'Select date first' : 'Select Flight'}
                       </option>
-                    ))}
-                  </select>
+                      {flightNumbers.map((flight, index) => (
+                        <option key={index} value={String(flight)}>
+                          {flight}
+                        </option>
+                      ))}
+                    </select>
+                    <div className="absolute right-3 top-1/2 transform -translate-y-1/2 pointer-events-none">
+                      <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                      </svg>
+                    </div>
+                  </div>
+                  {!flightDate && (
+                    <p className="mt-1 text-xs text-gray-500 italic">* Available flights will appear after selecting a date.</p>
+                  )}
                 </div>
 
-                {/* Proceed Button */}
+                {/* Start Scanning Button */}
                 <button
                   onClick={handleFlightSelect}
                   disabled={!flightNumber || !flightDate || isLoadingFlights}
-                  className="w-full bg-[#00A651] text-white px-6 py-3 rounded-lg font-semibold text-base hover:bg-[#008a43] transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed disabled:hover:bg-gray-300 flex items-center justify-center gap-2"
+                  className="w-full bg-gray-300 text-gray-500 px-6 py-4 rounded-lg font-semibold text-base transition-colors disabled:cursor-not-allowed disabled:hover:bg-gray-300 enabled:bg-[#00A651] enabled:text-white enabled:hover:bg-[#008a43] flex items-center justify-center gap-2"
                 >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 001.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
+                  <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                    <rect x="3" y="3" width="6" height="6" rx="1"/>
+                    <rect x="3" y="15" width="6" height="6" rx="1"/>
+                    <rect x="15" y="3" width="6" height="6" rx="1"/>
+                    <rect x="15" y="15" width="6" height="6" rx="1"/>
                   </svg>
-                  Start Scanning
+                  <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                    <rect x="3" y="3" width="6" height="6" rx="1"/>
+                    <rect x="3" y="15" width="6" height="6" rx="1"/>
+                    <rect x="15" y="3" width="6" height="6" rx="1"/>
+                    <rect x="15" y="15" width="6" height="6" rx="1"/>
+                  </svg>
+                  <span>Start Scanning</span>
                 </button>
+
+                {/* Footer */}
+                <div className="flex items-center justify-between mt-8 pt-6 border-t border-gray-200">
+                  <div className="flex items-center gap-2 text-sm text-gray-500">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <span className="hover:text-gray-700 cursor-pointer">Need help? Contact support</span>
+                  </div>
+                  <span className="text-sm text-gray-500">v2.4.1</span>
+                </div>
               </div>
             </div>
           )}

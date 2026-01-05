@@ -123,7 +123,7 @@ export default function StationManagement() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
+    <div className="min-h-screen bg-[#f5f7fa] flex flex-col">
       <Header activeTab="master-data" />
       <NotificationContainer notifications={notifications} onRemove={removeNotification} />
 
@@ -144,62 +144,78 @@ export default function StationManagement() {
               <LoadingSpinner size="lg" />
             </div>
           ) : (
-            <div className="bg-white rounded-lg shadow overflow-hidden">
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
               <div className="overflow-x-auto">
                 <table className="min-w-full divide-y divide-gray-200">
                   <thead className="bg-gray-50">
                     <tr>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Code</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">City</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Country</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                      <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                      <th className="px-6 py-4 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">CODE</th>
+                      <th className="px-6 py-4 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">NAME</th>
+                      <th className="px-6 py-4 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">CITY</th>
+                      <th className="px-6 py-4 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">COUNTRY</th>
+                      <th className="px-6 py-4 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">STATUS</th>
+                      <th className="px-6 py-4 text-right text-xs font-semibold text-gray-700 uppercase tracking-wider">ACTIONS</th>
                     </tr>
                   </thead>
                   <tbody className="bg-white divide-y divide-gray-200">
                     {stations?.map((station) => (
-                      <tr key={station.id} className={!station.isActive ? 'opacity-50' : ''}>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{station.code}</td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{station.name}</td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{station.city}</td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{station.country}</td>
+                      <tr key={station.id} className={`hover:bg-gray-50 transition-colors ${!station.isActive ? 'opacity-50' : ''}`}>
                         <td className="px-6 py-4 whitespace-nowrap">
-                          <span className={`px-2 py-1 text-xs font-semibold rounded-full ${
-                            station.isActive ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                          <span className="inline-flex items-center px-3 py-1.5 rounded-md bg-gray-100 text-gray-900 text-sm font-bold tracking-wider">
+                            {station.code}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">{station.name}</td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">{station.city}</td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">{station.country}</td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <span className={`px-3 py-1 text-xs font-semibold rounded-full ${
+                            station.isActive ? 'bg-[#00A651] text-white' : 'bg-red-100 text-red-800'
                           }`}>
                             {station.isActive ? 'Active' : 'Inactive'}
                           </span>
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                          <div className="flex items-center justify-end gap-2">
+                        <td className="px-6 py-4 whitespace-nowrap text-right">
+                          <div className="flex items-center justify-end gap-3">
                             <button
                               onClick={() => handleEdit(station)}
-                              className="text-blue-600 hover:text-blue-900"
+                              className="p-2 text-[#00A651] hover:bg-[#00A651]/10 rounded-lg transition-colors"
+                              title="Edit"
                             >
-                              Edit
+                              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                              </svg>
                             </button>
                             {deleteConfirm === station.id ? (
                               <>
                                 <button
                                   onClick={() => handleDelete(station.id)}
-                                  className="text-red-600 hover:text-red-900"
+                                  className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                                  title="Confirm"
                                 >
-                                  Confirm
+                                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                  </svg>
                                 </button>
                                 <button
                                   onClick={() => setDeleteConfirm(null)}
-                                  className="text-gray-600 hover:text-gray-900"
+                                  className="p-2 text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+                                  title="Cancel"
                                 >
-                                  Cancel
+                                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                  </svg>
                                 </button>
                               </>
                             ) : (
                               <button
                                 onClick={() => setDeleteConfirm(station.id)}
-                                className="text-red-600 hover:text-red-900"
+                                className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                                title="Deactivate"
                               >
-                                Deactivate
+                                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                </svg>
                               </button>
                             )}
                           </div>

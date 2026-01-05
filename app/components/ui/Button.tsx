@@ -18,10 +18,10 @@ export function Button({
   ...props
 }: ButtonProps) {
   const variants = {
-    primary: 'bg-[#00A651] text-white hover:bg-[#008a43]',
-    secondary: 'bg-gray-600 text-white hover:bg-gray-700',
-    danger: 'bg-red-600 text-white hover:bg-red-700',
-    outline: 'border-2 border-gray-300 text-gray-700 hover:bg-gray-50',
+    primary: 'bg-[#00A651] text-white hover:bg-[#008a43] shadow-sm hover:shadow-md',
+    secondary: 'bg-gray-600 text-white hover:bg-gray-700 shadow-sm hover:shadow-md',
+    danger: 'bg-red-600 text-white hover:bg-red-700 shadow-sm hover:shadow-md',
+    outline: 'border-2 border-gray-300 text-gray-700 hover:bg-gray-50 hover:border-gray-400',
   };
 
   const sizes = {
@@ -32,7 +32,7 @@ export function Button({
 
   return (
     <button
-      className={`${variants[variant]} ${sizes[size]} rounded-lg font-semibold transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed disabled:hover:bg-gray-300 flex items-center justify-center gap-2 ${className}`}
+      className={`${variants[variant]} ${sizes[size]} rounded-lg font-semibold transition-all disabled:bg-gray-300 disabled:cursor-not-allowed disabled:hover:bg-gray-300 disabled:shadow-none flex items-center justify-center gap-2 ${className}`}
       disabled={disabled || isLoading}
       {...props}
     >

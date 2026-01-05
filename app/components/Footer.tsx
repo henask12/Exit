@@ -6,12 +6,12 @@ interface FooterProps {
 
 export default function Footer({ activeTab = 'flight-monitor' }: FooterProps) {
   return (
-    <footer className="bg-[#b3d9ff] px-3 sm:px-4 md:px-6 py-3 sm:py-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 sm:gap-0">
+    <footer className="bg-white border-t border-gray-200 px-3 sm:px-4 md:px-6 py-3 sm:py-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 sm:gap-0 shadow-sm">
       <nav className="flex items-center gap-2 sm:gap-4 md:gap-6 flex-wrap">
         <Link 
           href="/flight-monitor" 
           className={`flex items-center gap-1 sm:gap-2 transition-colors text-xs sm:text-sm ${
-            activeTab === 'flight-monitor' ? 'text-blue-700 border-b-2 border-blue-700 pb-1' : 'text-gray-700 hover:text-blue-700'
+            activeTab === 'flight-monitor' ? 'text-[#00A651] border-b-2 border-[#00A651] pb-1 font-semibold' : 'text-gray-700 hover:text-[#00A651]'
           }`}
         >
           <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -22,7 +22,7 @@ export default function Footer({ activeTab = 'flight-monitor' }: FooterProps) {
         <Link 
           href="/discrepancy-management" 
           className={`flex items-center gap-1 sm:gap-2 transition-colors text-xs sm:text-sm ${
-            activeTab === 'discrepancy-management' ? 'text-blue-700 border-b-2 border-blue-700 pb-1' : 'text-gray-700 hover:text-blue-700'
+            activeTab === 'discrepancy-management' ? 'text-[#00A651] border-b-2 border-[#00A651] pb-1 font-semibold' : 'text-gray-700 hover:text-[#00A651]'
           }`}
         >
           <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -33,7 +33,7 @@ export default function Footer({ activeTab = 'flight-monitor' }: FooterProps) {
         <Link 
           href="/analytics-reports" 
           className={`flex items-center gap-1 sm:gap-2 transition-colors text-xs sm:text-sm ${
-            activeTab === 'analytics-reports' ? 'text-blue-700 border-b-2 border-blue-700 pb-1' : 'text-gray-700 hover:text-blue-700'
+            activeTab === 'analytics-reports' ? 'text-[#00A651] border-b-2 border-[#00A651] pb-1 font-semibold' : 'text-gray-700 hover:text-[#00A651]'
           }`}
         >
           <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -42,7 +42,7 @@ export default function Footer({ activeTab = 'flight-monitor' }: FooterProps) {
           <span className="hidden xs:inline">Analytics & Reports</span>
         </Link>
       </nav>
-      <button className="text-gray-700 hover:text-blue-700 self-start sm:self-auto">
+      <button className="text-gray-700 hover:text-[#00A651] self-start sm:self-auto transition-colors">
         <svg className="w-5 h-5 sm:w-6 sm:h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
         </svg>

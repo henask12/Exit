@@ -14,9 +14,9 @@ export default function AlertCard({ type, code, time, message, showResolve = fal
       bg: 'bg-yellow-50'
     },
     success: {
-      border: 'border-l-blue-500',
-      icon: 'text-blue-600',
-      bg: 'bg-blue-50'
+      border: 'border-l-[#00A651]',
+      icon: 'text-[#00A651]',
+      bg: 'bg-[#00A651]/10'
     },
     error: {
       border: 'border-l-red-500',
@@ -28,7 +28,7 @@ export default function AlertCard({ type, code, time, message, showResolve = fal
   const color = colors[type];
 
   return (
-    <div className={`bg-white rounded-lg shadow-sm p-4 border-l-4 ${color.border} flex items-start justify-between`}>
+    <div className={`bg-white rounded-xl shadow-sm p-4 border-l-4 ${color.border} flex items-start justify-between hover:shadow-md transition-shadow`}>
       <div className="flex items-start gap-3 flex-1">
         <div className={`p-2 rounded ${color.bg}`}>
           {type === 'warning' || type === 'error' ? (
@@ -50,7 +50,7 @@ export default function AlertCard({ type, code, time, message, showResolve = fal
         </div>
       </div>
       {showResolve && (
-        <button className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium">
+        <button className="px-4 py-2 bg-[#00A651] text-white rounded-lg hover:bg-[#008a43] transition-colors text-sm font-semibold shadow-sm">
           Resolve
         </button>
       )}
