@@ -1747,8 +1747,9 @@ export default function MobileScanner() {
               />
 
               {/* Camera Scanner Frame - using ZXing */}
-              <div className="relative mb-4 sm:mb-6">
-                <div className="bg-gray-900 rounded-lg overflow-hidden aspect-video flex items-center justify-center relative h-[220px] sm:h-[280px] md:h-[480px] min-h-[180px] sm:min-h-[220px] md:min-h-[300px]">
+              <div className="relative mb-4 sm:mb-6 w-full px-2 sm:px-0">
+                {/* Responsive camera frame */}
+                <div className="bg-gray-900 rounded-lg sm:rounded-xl shadow-lg sm:shadow-xl overflow-hidden aspect-video flex items-center justify-center relative min-h-[180px] sm:min-h-[220px] md:min-h-[300px]mx-auto">
                   {/* Video element - ID required by ZXing decodeFromVideoDevice */}
                   <video
                     ref={videoRef}
@@ -1772,15 +1773,15 @@ export default function MobileScanner() {
                   {/* Corner markers - white brackets */}
                   {isScanning && (
                     <>
-                      <div className="absolute top-2 left-2 sm:top-4 sm:left-4 w-8 h-8 sm:w-12 sm:h-12 border-t-2 sm:border-t-4 border-l-2 sm:border-l-4 border-white rounded-tl-lg z-10"></div>
-                      <div className="absolute top-2 right-2 sm:top-4 sm:right-4 w-8 h-8 sm:w-12 sm:h-12 border-t-2 sm:border-t-4 border-r-2 sm:border-r-4 border-white rounded-tr-lg z-10"></div>
-                      <div className="absolute bottom-2 left-2 sm:bottom-4 sm:left-4 w-8 h-8 sm:w-12 sm:h-12 border-b-2 sm:border-b-4 border-l-2 sm:border-l-4 border-white rounded-bl-lg z-10"></div>
-                      <div className="absolute bottom-2 right-2 sm:bottom-4 sm:right-4 w-8 h-8 sm:w-12 sm:h-12 border-b-2 sm:border-b-4 border-r-2 sm:border-r-4 border-white rounded-br-lg z-10"></div>
+                      <div className="absolute top-2 left-2 sm:top-4 sm:left-4 md:top-5 md:left-5 w-7 h-7 sm:w-11 sm:h-11 md:w-14 md:h-14 border-t-2 sm:border-t-3 md:border-t-[5px] border-l-2 sm:border-l-3 md:border-l-[5px] border-white rounded-tl-lg z-10"></div>
+                      <div className="absolute top-2 right-2 sm:top-4 sm:right-4 md:top-5 md:right-5 w-7 h-7 sm:w-11 sm:h-11 md:w-14 md:h-14 border-t-2 sm:border-t-3 md:border-t-[5px] border-r-2 sm:border-r-3 md:border-r-[5px] border-white rounded-tr-lg z-10"></div>
+                      <div className="absolute bottom-2 left-2 sm:bottom-4 sm:left-4 md:bottom-5 md:left-5 w-7 h-7 sm:w-11 sm:h-11 md:w-14 md:h-14 border-b-2 sm:border-b-3 md:border-b-[5px] border-l-2 sm:border-l-3 md:border-l-[5px] border-white rounded-bl-lg z-10"></div>
+                      <div className="absolute bottom-2 right-2 sm:bottom-4 sm:right-4 md:bottom-5 md:right-5 w-7 h-7 sm:w-11 sm:h-11 md:w-14 md:h-14 border-b-2 sm:border-b-3 md:border-b-[5px] border-r-2 sm:border-r-3 md:border-r-[5px] border-white rounded-br-lg z-10"></div>
 
                       {/* Scanning indicator */}
                       {!scanResult && (
-                        <div className="absolute top-4 left-1/2 transform -translate-x-1/2 z-10">
-                          <div className="bg-red-500 text-white px-3 py-1 rounded-full text-xs font-semibold flex items-center gap-2 animate-pulse">
+                        <div className="absolute top-3 sm:top-4 left-1/2 transform -translate-x-1/2 z-10 px-2">
+                          <div className="bg-red-500 text-white px-3 py-1 rounded-full text-[11px] sm:text-xs font-semibold flex items-center gap-2 animate-pulse shadow-md whitespace-nowrap">
                             <div className="w-2 h-2 bg-white rounded-full"></div>
                             Scanning...
                           </div>
@@ -1802,8 +1803,8 @@ export default function MobileScanner() {
 
                   {/* Status Overlay - Loading, Success, or Error */}
                   {scanStatus && (
-                    <div className="absolute inset-0 bg-black bg-opacity-60 flex items-center justify-center z-20 rounded-lg">
-                      <div className={`rounded-xl p-6 sm:p-8 shadow-2xl max-w-xs w-full mx-4 ${scanStatus === 'success'
+                      <div className="absolute inset-0 bg-black bg-opacity-60 flex items-center justify-center z-20 rounded-lg">
+                      <div className={`rounded-xl p-5 sm:p-7 md:p-8 shadow-2xl max-w-[320px] sm:max-w-xs w-[90%] sm:w-full mx-4 ${scanStatus === 'success'
                         ? 'bg-[#00A651]' // ET Green
                         : scanStatus === 'error'
                           ? 'bg-red-600'
@@ -1813,7 +1814,7 @@ export default function MobileScanner() {
                           {scanStatus === 'loading' && (
                             <>
                               {/* Spinner */}
-                              <div className="relative w-16 h-16 mb-4">
+                              <div className="relative w-14 h-14 sm:w-16 sm:h-16 mb-4">
                                 <div className="absolute inset-0 border-4 border-blue-200 rounded-full"></div>
                                 <div className="absolute inset-0 border-4 border-blue-600 rounded-full border-t-transparent animate-spin"></div>
                               </div>
@@ -1854,14 +1855,14 @@ export default function MobileScanner() {
 
                 {/* Button Group - Native Camera and Web Camera */}
                 {!isScanning && !scanResult && (
-                  <div className="absolute -bottom-4 sm:-bottom-6 left-1/2 transform -translate-x-1/2 flex items-center gap-3 z-10">
+                      <div className="absolute -bottom-5 sm:-bottom-6 left-1/2 transform -translate-x-1/2 flex items-center gap-2 sm:gap-3 z-10 px-2">
                     {/* Native Camera Button */}
                     <button
                       onClick={openNativeCamera}
-                      className="w-12 h-12 sm:w-14 sm:h-14 bg-purple-600 rounded-full flex items-center justify-center shadow-lg hover:bg-purple-700 active:bg-purple-800 transition-colors touch-manipulation"
+                          className="w-11 h-11 sm:w-14 sm:h-14 bg-purple-600 rounded-full flex items-center justify-center shadow-lg hover:bg-purple-700 active:bg-purple-800 transition-colors touch-manipulation"
                       title="Open Native Camera"
                     >
-                      <svg className="w-5 h-5 sm:w-6 sm:h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <svg className="w-5 h-5 sm:w-6 sm:h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 001.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
                       </svg>
@@ -1872,7 +1873,7 @@ export default function MobileScanner() {
                       onClick={() => {
                         startCamera();
                       }}
-                      className="w-12 h-12 sm:w-14 sm:h-14 bg-blue-600 rounded-full flex items-center justify-center shadow-lg hover:bg-blue-700 active:bg-blue-800 transition-colors touch-manipulation"
+                          className="w-11 h-11 sm:w-14 sm:h-14 bg-blue-600 rounded-full flex items-center justify-center shadow-lg hover:bg-blue-700 active:bg-blue-800 transition-colors touch-manipulation"
                       title="Start Web Camera"
                     >
                       <svg className="w-5 h-5 sm:w-6 sm:h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
