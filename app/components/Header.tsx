@@ -14,11 +14,18 @@ export default function Header({ activeTab = 'operations' }: HeaderProps) {
   const [showMasterData, setShowMasterData] = useState(false);
   const [showAccountManagement, setShowAccountManagement] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
+  const [userData, setUserData] = useState<any>(null);
+  const [mounted, setMounted] = useState(false);
   const masterDataRef = useRef<HTMLDivElement>(null);
   const accountManagementRef = useRef<HTMLDivElement>(null);
   const profileMenuRef = useRef<HTMLDivElement>(null);
 
-  const userData = user || auth.getUser();
+  // Only get user data on client side to avoid hydration mismatch
+  useEffect(() => {
+    setMounted(true);
+    const currentUser = user || auth.getUser();
+    setUserData(currentUser);
+  }, [user]);
 
   // Close dropdowns when clicking outside
   useEffect(() => {
@@ -185,7 +192,7 @@ export default function Header({ activeTab = 'operations' }: HeaderProps) {
           </Link>
 
           {/* Station Code & Profile */}
-          {userData && (
+          {mounted && userData && (
             <div className="flex items-center gap-3 ml-auto">
               {/* Station Code Badge with Blue Dot */}
               <div className="px-3 py-1.5 sm:px-4 sm:py-2 bg-blue-800 rounded-lg flex items-center gap-2 shadow-md">

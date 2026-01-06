@@ -1,10 +1,12 @@
 'use client';
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import Header from '../components/Header';
 import { BrowserMultiFormatReader } from '@zxing/browser';
 import { NotFoundException, DecodeHintType, BarcodeFormat } from '@zxing/library';
 import { createWorker } from 'tesseract.js';
+import { apiCall } from '@/lib/auth';
+import { auth } from '@/lib/auth';
 
 type ViewMode = 'flight-selection' | 'camera';
 
@@ -15,7 +17,7 @@ export default function MobileScanner() {
   const [recentScans, setRecentScans] = useState<Array<any>>([]);
   const [cameraPermission, setCameraPermission] = useState<'prompt' | 'granted' | 'denied' | 'checking'>('checking');
   const [showPermissionPrompt, setShowPermissionPrompt] = useState(false);
-  const [notifications, setNotifications] = useState<Array<{id: string, type: 'success' | 'error' | 'warning' | 'info', message: string, details?: string}>>([]);
+  const [notifications, setNotifications] = useState<Array<{ id: string, type: 'success' | 'error' | 'warning' | 'info', message: string, details?: string }>>([]);
   const [apiConnectionError, setApiConnectionError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [scanStatus, setScanStatus] = useState<'loading' | 'success' | 'error' | null>(null);
@@ -27,7 +29,126 @@ export default function MobileScanner() {
   const [flightDetails, setFlightDetails] = useState<any>(null);
   const [scannedPassengers, setScannedPassengers] = useState<Set<string>>(new Set());
   const [showRemainingPassengers, setShowRemainingPassengers] = useState(false);
-  
+  const [activitySearchQuery, setActivitySearchQuery] = useState('');
+  const [activityScanTypeFilter, setActivityScanTypeFilter] = useState<string>('all');
+  const [flightProgress, setFlightProgress] = useState<any>(null);
+
+  // Calculate scans in the last 5 minutes
+  const scansInLast5Minutes = useMemo(() => {
+    const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+    return recentScans.filter((scan: any) => {
+      const scanTime = scan.scannedAt ? new Date(scan.scannedAt) : (scan.timestamp ? new Date(scan.timestamp) : null);
+      return scanTime && scanTime >= fiveMinutesAgo;
+    }).length;
+  }, [recentScans]);
+
+  // Get logged-in user's station
+  const userStation = useMemo(() => {
+    const user = auth.getUser();
+    return user?.station?.code || station || 'N/A';
+  }, [station]);
+
+  // Format route from API (e.g., "ADD-GVA-MAN" to "ADD → GVA → MAN")
+  const formattedRoute = useMemo(() => {
+    if (flightDetails?.route) {
+      return flightDetails.route.split('-').join(' → ');
+    }
+    return 'N/A';
+  }, [flightDetails?.route]);
+
+  // Fetch flight progress
+  const fetchFlightProgress = useCallback(async () => {
+    if (!flightNumber || !flightDate || !station) return;
+    
+    try {
+      const dateStr = flightDate.split('T')[0]; // Get YYYY-MM-DD format
+      const response = await apiCall(`/Flight/progress?flightNumber=${flightNumber}&date=${dateStr}&station=${station}`);
+      if (response.ok) {
+        const progress = await response.json();
+        setFlightProgress(progress);
+      }
+    } catch (error) {
+      console.error('Error fetching flight progress:', error);
+    }
+  }, [flightNumber, flightDate, station]);
+
+  // Manually match a passenger (when boarding pass is not found)
+  const handleManualMatch = async (passenger: any) => {
+    if (!passenger || !passenger.id) return;
+
+    try {
+      setIsLoading(true);
+      
+      // Call API to mark passenger as scanned
+      const response = await apiCall('/Flight/scan-complete', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          passengerId: passenger.id,
+          station: userStation || station,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to mark passenger as scanned');
+      }
+
+      const matchKey = `${passenger.pnrLocator || ''}_${passenger.seat || ''}`.toUpperCase();
+      
+      // Add to scanned passengers
+      setScannedPassengers(prev => new Set([...prev, matchKey]));
+
+      // Create a scan record for manual match
+      const scanData = {
+        id: Date.now().toString(),
+        success: true,
+        source: 'manual',
+        boardingPass: {
+          passengerName: passenger.passengerName || passenger.name,
+          seat: passenger.seat,
+          pnr: passenger.pnrLocator
+        },
+        scanTime: new Date().toLocaleTimeString(),
+        scanDate: new Date().toLocaleDateString(),
+        timestamp: new Date().toISOString(),
+        scannedAt: new Date().toISOString(),
+        matched: true,
+        matchedPassenger: passenger,
+        passengerName: passenger.passengerName || passenger.name,
+        pnrLocator: passenger.pnrLocator,
+        scanType: 'manual'
+      };
+
+      // Add to recent scans
+      setRecentScans(prev => [scanData, ...prev]);
+
+      // Refresh flight progress and flight details to get updated scan status
+      await fetchFlightProgress();
+      
+      // Refresh flight details to get updated scan status
+      if (flightNumber && flightDate && station) {
+        try {
+          const dateStr = flightDate.split('T')[0];
+          const detailsResponse = await apiCall(`/Flight/details?flightNumber=${flightNumber}&date=${dateStr}&station=${station}`);
+          if (detailsResponse.ok) {
+            const updatedDetails = await detailsResponse.json();
+            setFlightDetails(updatedDetails);
+          }
+        } catch (error) {
+          console.error('Error refreshing flight details:', error);
+        }
+      }
+
+      addNotification('success', 'Passenger manually matched', `${passenger.passengerName || passenger.name} has been marked as scanned`);
+    } catch (error: any) {
+      addNotification('error', 'Manual Match Failed', error.message || 'Failed to mark passenger as scanned');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const videoRef = useRef<HTMLVideoElement>(null);
   const codeReaderRef = useRef<BrowserMultiFormatReader | null>(null);
   const scanningActiveRef = useRef<boolean>(false);
@@ -37,7 +158,7 @@ export default function MobileScanner() {
   const apiScanIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const isProcessingScanRef = useRef<boolean>(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  
+
   // Initialize ZXing BarcodeReader with support for 2D barcodes and PDF417
   // Note: PDF417 requires BigInt support in the browser (available in modern browsers)
   // BrowserMultiFormatReader supports all formats by default, including PDF417 and 2D barcodes
@@ -50,15 +171,15 @@ export default function MobileScanner() {
         // Using default constructor ensures all readers are properly initialized
         codeReaderRef.current = new BrowserMultiFormatReader();
         console.log('ZXing barcode reader initialized - supports all formats including PDF417 and 2D barcodes');
-        
+
         // List available video devices and select the first one (prefer back camera)
         // Note: listVideoInputDevices is an instance method (works in runtime, types may be wrong)
         try {
           const videoInputDevices = await (codeReaderRef.current as any).listVideoInputDevices();
           if (videoInputDevices.length > 0) {
             // Prefer back camera (environment facing)
-            const backCamera = videoInputDevices.find((device: any) => 
-              device.label.toLowerCase().includes('back') || 
+            const backCamera = videoInputDevices.find((device: any) =>
+              device.label.toLowerCase().includes('back') ||
               device.label.toLowerCase().includes('rear') ||
               device.label.toLowerCase().includes('environment')
             );
@@ -70,21 +191,21 @@ export default function MobileScanner() {
         }
       }
     };
-    
+
     initZXing();
-    
+
     return () => {
       // Cleanup on unmount
       if (apiScanIntervalRef.current) {
         clearInterval(apiScanIntervalRef.current);
         apiScanIntervalRef.current = null;
       }
-      
+
       if (ocrFallbackTimerRef.current) {
         clearTimeout(ocrFallbackTimerRef.current);
         ocrFallbackTimerRef.current = null;
       }
-      
+
       if (codeReaderRef.current) {
         try {
           (codeReaderRef.current as any).reset();
@@ -100,7 +221,7 @@ export default function MobileScanner() {
   const addNotification = (type: 'success' | 'error' | 'warning' | 'info', message: string, details?: string) => {
     const id = Date.now().toString() + Math.random().toString(36).substr(2, 9);
     setNotifications(prev => [...prev, { id, type, message, details }]);
-    
+
     // Auto-remove after 5 seconds for success/info, 8 seconds for error/warning
     const timeout = type === 'error' || type === 'warning' ? 8000 : 5000;
     setTimeout(() => {
@@ -122,7 +243,7 @@ export default function MobileScanner() {
           const result = await navigator.permissions.query({ name: 'camera' as PermissionName });
           const permissionState = result.state === 'granted' ? 'granted' : result.state === 'denied' ? 'denied' : 'prompt';
           setCameraPermission(permissionState);
-          
+
           // Listen for permission changes
           result.onchange = () => {
             const newState = result.state === 'granted' ? 'granted' : result.state === 'denied' ? 'denied' : 'prompt';
@@ -195,7 +316,7 @@ export default function MobileScanner() {
       videoRef.current.setAttribute('webkit-playsinline', 'true');
       videoRef.current.muted = true;
       videoRef.current.playsInline = true;
-      
+
       // Get camera stream
       const constraints: MediaStreamConstraints = {
         video: {
@@ -208,11 +329,11 @@ export default function MobileScanner() {
 
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       streamRef.current = stream;
-      
+
       // Assign stream to video element
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
-        
+
         // Wait for video to be ready
         await new Promise<void>((resolve, reject) => {
           if (!videoRef.current) {
@@ -228,7 +349,7 @@ export default function MobileScanner() {
           };
 
           videoRef.current.addEventListener('loadedmetadata', onLoadedMetadata);
-          
+
           // Timeout after 5 seconds
           setTimeout(() => {
             videoRef.current?.removeEventListener('loadedmetadata', onLoadedMetadata);
@@ -236,14 +357,14 @@ export default function MobileScanner() {
           }, 5000);
         });
       }
-      
+
       setIsScanning(true);
       // addNotification('success', 'Camera started', 'Camera is ready. Tap the capture button to scan.');
-      
+
     } catch (error: any) {
       console.error('Error starting camera:', error);
       setIsScanning(false);
-      
+
       if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
         setCameraPermission('denied');
         setShowPermissionPrompt(true);
@@ -267,74 +388,74 @@ export default function MobileScanner() {
       console.log('Cannot start scanning - missing video element');
       return;
     }
-    
+
     if (scanningActiveRef.current) {
       console.log('Scanning already active');
       return;
     }
-    
+
     scanningActiveRef.current = true;
     addNotification('info', 'Scanning started', 'Looking for boarding pass barcodes...');
-    
+
     // Periodically capture frames and send to API
     const scanInterval = setInterval(async () => {
       if (!scanningActiveRef.current || !videoRef.current || isProcessingScanRef.current || scanResult) {
         return;
       }
-      
+
       // Check if video is ready
       if (videoRef.current.readyState !== videoRef.current.HAVE_ENOUGH_DATA) {
         return;
       }
-      
+
       isProcessingScanRef.current = true;
-      
+
       try {
         // Create canvas to capture current frame
         const canvas = document.createElement('canvas');
         canvas.width = videoRef.current.videoWidth;
         canvas.height = videoRef.current.videoHeight;
         const ctx = canvas.getContext('2d');
-        
+
         if (!ctx) {
           isProcessingScanRef.current = false;
           return;
         }
-        
+
         // Draw current video frame to canvas
         ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
-        
+
         // Convert canvas to blob
         canvas.toBlob(async (blob) => {
           isProcessingScanRef.current = false;
-          
+
           if (!blob || !scanningActiveRef.current) {
             return;
           }
-          
+
           try {
             setIsLoading(true);
             setScanStatus('loading');
-            
+
             // Send to API
             const apiResult = await scanBoardingPassAPI(blob);
-            
+
             if (apiResult.success && apiResult.decodedText && scanningActiveRef.current) {
               console.log('API scan result:', apiResult);
               setScanStatus('success');
               const scanType = apiResult.scanType || 'Barcode';
               const decodedText = apiResult.decodedText;
-              
+
               // Stop scanning
               scanningActiveRef.current = false;
               if (apiScanIntervalRef.current) {
                 clearInterval(apiScanIntervalRef.current);
                 apiScanIntervalRef.current = null;
               }
-              
+
               // Parse the decoded text
               const boardingPassData = parseBoardingPass(decodedText);
-              
+
               // Create scan result
               const scanData = {
                 id: Date.now().toString(),
@@ -348,15 +469,15 @@ export default function MobileScanner() {
                 ocrConfidence: apiResult.ocrConfidence,
                 timestamp: new Date().toISOString()
               };
-              
+
               // Add to recent scans (save all scans, no limit)
               setRecentScans(prev => [scanData, ...prev]);
-              
+
               // Display result
               setScanResult(scanData);
-              
+
               addNotification('success', `${scanType} scan successful!`, `Detected: ${boardingPassData.passengerName || boardingPassData.flightNumber || 'Boarding pass'}`);
-              
+
               // Resume scanning after 3 seconds
               setTimeout(() => {
                 setScanResult(null);
@@ -374,10 +495,10 @@ export default function MobileScanner() {
             }
           } catch (apiError: any) {
             setScanStatus('error');
-            
+
             // Handle API errors gracefully during continuous scanning
             const errorMessage = apiError?.message || 'Unknown error';
-            
+
             // Only show notification for connection errors (not for normal "no barcode found" cases)
             if (errorMessage.includes('Cannot connect') || errorMessage.includes('Network error')) {
               // Show error notification only once, not on every failed attempt
@@ -389,7 +510,7 @@ export default function MobileScanner() {
               // Other errors (like "no barcode found") are normal during scanning
               console.log('API scan attempt failed (normal during continuous scanning):', apiError);
             }
-            
+
             setTimeout(() => {
               setScanStatus(null);
             }, 2000);
@@ -397,34 +518,34 @@ export default function MobileScanner() {
             setIsLoading(false);
           }
         }, 'image/jpeg', 0.9);
-        
+
       } catch (error) {
         isProcessingScanRef.current = false;
         console.error('Error capturing frame:', error);
       }
     }, 1000); // Scan every 2 seconds
-    
+
     apiScanIntervalRef.current = scanInterval;
   };
-  
+
   // Stop scanning
   const stopScanning = () => {
     scanningActiveRef.current = false;
-    
+
     // Clear API scan interval
     if (apiScanIntervalRef.current) {
       clearInterval(apiScanIntervalRef.current);
       apiScanIntervalRef.current = null;
     }
-    
+
     // Clear OCR fallback timer
     if (ocrFallbackTimerRef.current) {
       clearTimeout(ocrFallbackTimerRef.current);
       ocrFallbackTimerRef.current = null;
     }
-    
+
     isProcessingScanRef.current = false;
-    
+
     if (codeReaderRef.current) {
       try {
         (codeReaderRef.current as any).reset();
@@ -438,17 +559,17 @@ export default function MobileScanner() {
   const performOCR = async (canvas: HTMLCanvasElement): Promise<string | null> => {
     try {
       addNotification('info', 'OCR Processing', 'Extracting text from boarding pass...');
-      
+
       const worker = await createWorker('eng'); // English language
       const { data: { text } } = await worker.recognize(canvas);
       await worker.terminate();
-      
+
       if (text && text.trim().length > 0) {
         console.log('OCR extracted raw text:', text);
         console.log('OCR text length:', text.length);
         return text.trim();
       }
-      
+
       return null;
     } catch (error) {
       console.error('OCR error:', error);
@@ -471,10 +592,10 @@ export default function MobileScanner() {
       airline: '',
       source: 'OCR'
     };
-    
+
     // Normalize text - remove extra spaces and newlines
     const normalizedText = ocrText.replace(/\s+/g, ' ').toUpperCase();
-    
+
     // Extract passenger name - look for pattern LASTNAME/FIRSTNAME MS/MR
     // Ethiopian Airlines format: SAMUEL/ALERU MS
     const namePattern = /([A-Z]{2,}\/[A-Z]{2,}(?:\s+[A-Z]+)?(?:\s+(?:MS|MR|MRS|MISS))?)/;
@@ -490,7 +611,7 @@ export default function MobileScanner() {
         extracted.passengerName = nameWithoutTitle;
       }
     }
-    
+
     // Extract flight number - Ethiopian Airlines format: ET938, ET706
     // Look for pattern ET followed by 3-4 digits, avoid matching random text
     const flightPatterns = [
@@ -498,7 +619,7 @@ export default function MobileScanner() {
       /\b(ET\d{3,4})\b/, // ET followed by 3-4 digits as word boundary
       /\b([A-Z]{2}\d{3,4})\b/ // Any 2-letter airline code + 3-4 digits
     ];
-    
+
     for (const pattern of flightPatterns) {
       const match = normalizedText.match(pattern);
       if (match) {
@@ -511,14 +632,14 @@ export default function MobileScanner() {
         }
       }
     }
-    
+
     // Extract seat - look for pattern after "SEAT" label or standalone pattern
     // Format: 11A, 21A (1-2 digits + 1 letter)
     const seatPatterns = [
       /(?:SEAT|ST)[:\s]*(\d{1,2}[A-Z])/i, // After "SEAT" label
       /\b(\d{1,2}[A-Z])\b/ // Standalone seat pattern
     ];
-    
+
     for (const pattern of seatPatterns) {
       const match = normalizedText.match(pattern);
       if (match) {
@@ -530,14 +651,14 @@ export default function MobileScanner() {
         }
       }
     }
-    
+
     // Extract date - Ethiopian Airlines format: 10DEC
     const datePatterns = [
       /(\d{1,2}[A-Z]{3}\d{0,2})/, // 10DEC or 10DEC24
       /(\d{2}[A-Z]{3}\d{2})/, // 10DEC24
       /(\d{1,2}[A-Z]{3})/ // 10DEC
     ];
-    
+
     for (const pattern of datePatterns) {
       const match = normalizedText.match(pattern);
       if (match) {
@@ -545,14 +666,14 @@ export default function MobileScanner() {
         break;
       }
     }
-    
+
     // Extract PNR/Booking Code - 6 alphanumeric characters
     // Look for "BOOKING CODE" or "PNR" label, or standalone 6-char code
     const pnrPatterns = [
       /(?:BOOKING\s+CODE|PNR|BOOKING)[:\s]*([A-Z0-9]{6})/i,
       /\b([A-Z0-9]{6})\b/ // Standalone 6-character code
     ];
-    
+
     for (const pattern of pnrPatterns) {
       const match = normalizedText.match(pattern);
       if (match) {
@@ -564,13 +685,13 @@ export default function MobileScanner() {
         }
       }
     }
-    
+
     // Extract class - look for Y, J, F, C after "CLASS" label
     const classPatterns = [
       /(?:CLASS)[:\s]*([YJFC])/i,
       /\b([YJFC])\b/ // Standalone class code
     ];
-    
+
     for (const pattern of classPatterns) {
       const match = normalizedText.match(pattern);
       if (match) {
@@ -578,7 +699,7 @@ export default function MobileScanner() {
         break;
       }
     }
-    
+
     // Log extracted data for debugging
     console.log('OCR Extraction Results:', {
       passengerName: extracted.passengerName,
@@ -588,7 +709,7 @@ export default function MobileScanner() {
       date: extracted.date,
       class: extracted.class
     });
-    
+
     return extracted;
   };
 
@@ -597,7 +718,7 @@ export default function MobileScanner() {
     // IATA BCBP (Bar Coded Boarding Pass) format
     // Example: M2SAMUEL/ALERU MS     ESLPQOZ NDJADDET 0938 344Y011A0001...
     // Format structure: M[format code][name] [PNR] [origin][dest][airline][flight] [date][class][seat][sequence]...
-    
+
     const parsed: any = {
       raw: barcodeText,
       passengerName: '',
@@ -612,11 +733,11 @@ export default function MobileScanner() {
       destination: '',
       parseErrors: [] as string[]
     };
-    
+
     try {
       // Remove format code (M1, M2, etc.) if present
       let text = barcodeText.replace(/^M[0-9]/, '');
-      
+
       // Extract passenger name - format: LASTNAME/FIRSTNAME MS/MR
       // Example: SAMUEL/ALERU MS
       const nameMatch = text.match(/([A-Z]{2,}\/[A-Z]{2,}(?:\s+[A-Z]+)?(?:\s+(?:MS|MR|MRS|MISS))?)/);
@@ -632,7 +753,7 @@ export default function MobileScanner() {
         // Remove name from text for further parsing
         text = text.substring(nameMatch.index! + nameMatch[0].length).trim();
       }
-      
+
       // Extract PNR (Booking Code) - 6 alphanumeric characters
       // Usually appears early in the string after name, may have E prefix
       // Example from API: ESLPQOZ or SLPQOZ
@@ -641,7 +762,7 @@ export default function MobileScanner() {
         /\b([A-Z]{6})\b/, // Any 6-char uppercase letters (like SLPQOZ)
         /\b([A-Z0-9]{6})\b/, // Any 6-char alphanumeric
       ];
-      
+
       for (const pattern of pnrPatterns) {
         const pnrMatch = text.match(pattern);
         if (pnrMatch) {
@@ -653,7 +774,7 @@ export default function MobileScanner() {
           }
         }
       }
-      
+
       // Extract flight segments - format: [origin][dest][airline][flight] [date][class][seat][sequence]
       // Example from API: NDJADDET 0938 344Y011A0001
       // Or: ADDFRAET 0706 345Y021A0001
@@ -661,7 +782,7 @@ export default function MobileScanner() {
       const flightSegmentPattern = /([A-Z]{3})([A-Z]{3})([A-Z]{2})\s+(\d{3,4})\s+(\d{3})([YJFC])(\d{1,3})([A-Z])(\d{4})/g;
       const flightSegments: any[] = [];
       let match;
-      
+
       while ((match = flightSegmentPattern.exec(text)) !== null) {
         const segment = {
           origin: match[1],
@@ -675,7 +796,7 @@ export default function MobileScanner() {
         };
         flightSegments.push(segment);
       }
-      
+
       // Use first flight segment as primary
       if (flightSegments.length > 0) {
         const primary = flightSegments[0];
@@ -687,7 +808,7 @@ export default function MobileScanner() {
         parsed.origin = primary.origin;
         parsed.destination = primary.destination;
         parsed.date = primary.date; // Julian date format
-        
+
         // Convert Julian date to readable format if possible
         // Format: 344 = day 344 of year
         if (primary.date && primary.date.length === 3) {
@@ -696,7 +817,7 @@ export default function MobileScanner() {
           parsed.date = `Day ${dayOfYear}`;
         }
       }
-      
+
       // If no structured flight segment found, try simpler patterns
       if (!parsed.flightNumber) {
         // Look for flight number pattern (e.g., ET938, ET706)
@@ -706,7 +827,7 @@ export default function MobileScanner() {
           parsed.airline = flightMatch[1];
         }
       }
-      
+
       if (!parsed.seat) {
         // Look for seat pattern (e.g., 11A, 21A)
         const seatMatch = text.match(/\b(\d{1,2})([A-Z])\b/);
@@ -714,27 +835,27 @@ export default function MobileScanner() {
           parsed.seat = seatMatch[1] + seatMatch[2];
         }
       }
-      
+
       // Check if we successfully parsed any meaningful data
       const hasData = parsed.passengerName || parsed.flightNumber || parsed.seat || parsed.pnr;
       if (!hasData) {
         parsed.parseErrors.push('Could not extract passenger name, flight number, seat, or PNR from barcode');
       }
-      
+
       console.log('Parsed boarding pass data:', parsed);
-      
+
     } catch (error: any) {
       console.error('Error parsing boarding pass:', error);
       parsed.parseErrors.push(`Parsing error: ${error.message || 'Unknown error'}`);
     }
-    
+
     return parsed;
   };
 
   // Handle detected boarding pass barcode
   const handleBoardingPassDetected = (barcodeText: string, ocrData?: any) => {
     // Scanning is already stopped when barcode is detected
-    
+
     // Determine source and show appropriate notification
     const source = ocrData ? 'OCR' : 'Barcode';
     if (ocrData) {
@@ -742,12 +863,12 @@ export default function MobileScanner() {
     } else {
       addNotification('success', 'Barcode detected!', `Raw data: ${barcodeText.substring(0, 50)}${barcodeText.length > 50 ? '...' : ''}`);
     }
-    
+
     // Parse boarding pass data - use OCR data if provided, otherwise parse from barcode
     const boardingPassData = ocrData || parseBoardingPass(barcodeText);
     const scanTime = new Date().toLocaleTimeString();
     const scanDate = new Date().toLocaleDateString();
-    
+
     // Create scan result object
     const scanData = {
       id: Date.now().toString(),
@@ -759,13 +880,13 @@ export default function MobileScanner() {
       barcodeText: barcodeText,
       timestamp: new Date().toISOString()
     };
-    
+
     // Add to recent scans (most recent first, save all scans)
     setRecentScans(prev => [scanData, ...prev]);
-    
+
     // Display the scanned boarding pass details
     setScanResult(scanData);
-    
+
     // Resume scanning after 3 seconds
     setTimeout(() => {
       setScanResult(null);
@@ -796,22 +917,22 @@ export default function MobileScanner() {
   // Fetch flight numbers from API
   const fetchFlightNumbers = async (station: string, flightDate: string) => {
     if (!station || !flightDate) return;
-    
+
     try {
       setIsLoadingFlights(true);
       const apiUrl = `https://alphaapi-et-transitpax.azurewebsites.net/api/Flight/numbers?station=${station}&flightDate=${flightDate}`;
-      
+
       const response = await fetch(apiUrl, {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
         },
       });
-      
+
       if (!response.ok) {
         throw new Error(`Failed to fetch flights: ${response.status}`);
       }
-      
+
       const data = await response.json();
       // API returns array of numbers like [309, 318, 322, ...]
       let flights: number[] = [];
@@ -837,29 +958,34 @@ export default function MobileScanner() {
     if (station && flightNumber && flightDate) {
       try {
         setIsLoadingFlights(true);
-        // Call API to get flight details
-        const apiUrl = `https://alphaapi-et-transitpax.azurewebsites.net/api/Flight/details?flightNumber=${flightNumber}&date=${flightDate}&station=${station}`;
-        
-        const response = await fetch(apiUrl, {
-          method: 'GET',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        });
-        
+        // Call API to get flight details with scan status
+        const dateStr = flightDate.split('T')[0]; // Get YYYY-MM-DD format
+        const response = await apiCall(`/Flight/details?flightNumber=${flightNumber}&date=${dateStr}&station=${station}`);
+
         if (!response.ok) {
           throw new Error(`Failed to fetch flight details: ${response.status}`);
         }
-        
+
         const data = await response.json();
-        
+
         // Store flight details
         setFlightDetails(data);
         // Reset scanned passengers when new flight is loaded
         setScannedPassengers(new Set());
-        
+
         console.log('Flight details:', data);
-        
+
+        // Fetch flight progress
+        try {
+          const progressResponse = await apiCall(`/Flight/progress?flightNumber=${flightNumber}&date=${dateStr}&station=${station}`);
+          if (progressResponse.ok) {
+            const progress = await progressResponse.json();
+            setFlightProgress(progress);
+          }
+        } catch (error) {
+          console.error('Error fetching flight progress:', error);
+        }
+
         // Switch to camera view
         setCurrentView('camera');
       } catch (error) {
@@ -878,13 +1004,25 @@ export default function MobileScanner() {
     }
   }, [station, flightDate]);
 
+  // Effect to fetch flight progress periodically when in camera view
+  useEffect(() => {
+    if (flightNumber && flightDate && station && currentView === 'camera') {
+      fetchFlightProgress();
+      const interval = setInterval(() => {
+        fetchFlightProgress();
+      }, 30000); // Refresh every 30 seconds
+      
+      return () => clearInterval(interval);
+    }
+  }, [flightNumber, flightDate, station, currentView, fetchFlightProgress]);
+
   // Send image to API for scanning
   const scanBoardingPassAPI = async (imageBlob: Blob): Promise<any> => {
     try {
-      
+
       const formData = new FormData();
       formData.append('file', imageBlob, 'boarding-pass.jpg');
-      
+
       const apiUrl = 'https://alphaapi-et-transitpax.azurewebsites.net/api/BoardingPass/scan';
 
       console.log('🌐 Making API request to:', apiUrl, {
@@ -893,28 +1031,28 @@ export default function MobileScanner() {
         imageType: imageBlob.type,
         timestamp: new Date().toISOString()
       });
-      
-      
+
+
       const response = await fetch(apiUrl, {
         method: 'POST',
         body: formData,
         // Note: CORS must be enabled on the API server
       });
-      
+
       console.log('📡 API response status:', response.status, response.statusText);
-      
+
       if (!response.ok) {
         const errorText = await response.text();
         throw new Error(`API error: ${response.status} ${response.statusText} - ${errorText}`);
       }
-      
+
       const data = await response.json();
       // Clear any previous connection errors on success
       setApiConnectionError(null);
       return data;
     } catch (error: any) {
       console.error('API scan error:', error);
-      
+
       // Determine error type and set appropriate message
       let errorMessage = 'Unknown error';
       if (error.message && error.message.includes('Failed to fetch')) {
@@ -927,7 +1065,7 @@ export default function MobileScanner() {
         errorMessage = error.message;
         setApiConnectionError(error.message);
       }
-      
+
       // Re-throw with improved error message
       throw new Error(errorMessage);
     }
@@ -939,33 +1077,33 @@ export default function MobileScanner() {
     if (!file) {
       return;
     }
-    
+
     // Reset input
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
-    
+
     try {
       setIsLoading(true);
       setScanStatus('loading');
-      
+
       // Convert file to blob
       const blob = await file.arrayBuffer().then(buffer => new Blob([buffer], { type: file.type }));
-      
+
       // Send to API for scanning (don't save yet)
       const apiResult = await scanBoardingPassAPI(blob);
-      
+
       if (apiResult.success && apiResult.decodedText) {
         setScanStatus('success');
         const scanType = apiResult.scanType || 'Barcode';
         const decodedText = apiResult.decodedText;
-        
+
         // Parse the decoded text
         const boardingPassData = parseBoardingPass(decodedText);
-        
+
         // Match with flight details
         const matchResult = matchPassenger(boardingPassData);
-        
+
         // Create scan result
         const scanData = {
           id: Date.now().toString(),
@@ -978,27 +1116,28 @@ export default function MobileScanner() {
           barcodeFormat: apiResult.barcodeFormat,
           ocrConfidence: apiResult.ocrConfidence,
           timestamp: new Date().toISOString(),
+          scannedAt: new Date().toISOString(), // Add scannedAt for consistency
           matched: matchResult.matched,
           matchedPassenger: matchResult.passenger
         };
-        
+
         // If matched, add to scanned passengers
         if (matchResult.matched && matchResult.matchKey) {
           setScannedPassengers(prev => new Set([...prev, matchResult.matchKey!]));
         }
-        
+
         // Add to recent scans (save all scans, no limit)
         setRecentScans(prev => [scanData, ...prev]);
-        
+
         // Display result
         setScanResult(scanData);
-        
+
         if (matchResult.matched) {
           addNotification('success', `${scanType} scan successful!`, `Matched: ${matchResult.passenger?.passengerName || boardingPassData.passengerName}`);
         } else {
           addNotification('warning', `${scanType} scan successful!`, `Not found in flight manifest: ${boardingPassData.passengerName || boardingPassData.flightNumber || 'Boarding pass'}`);
         }
-        
+
         // Clear result after 2 seconds to be ready for next capture
         setTimeout(() => {
           setScanResult(null);
@@ -1045,7 +1184,7 @@ export default function MobileScanner() {
     // Try to match by PNR first, then seat, then name
     for (const passenger of flightDetails.disembarkingPassengers) {
       const matchKey = `${passenger.pnrLocator || ''}_${passenger.seat || ''}`.toUpperCase();
-      
+
       if (pnr && passenger.pnrLocator?.toUpperCase() === pnr) {
         return { matched: true, passenger, matchKey };
       }
@@ -1066,13 +1205,13 @@ export default function MobileScanner() {
       addNotification('error', 'Camera not ready', 'Video element not available');
       return;
     }
-    
+
     // Check if video stream exists
     if (!streamRef.current) {
       addNotification('error', 'Camera not ready', 'Please start the camera first');
       return;
     }
-    
+
     // Check if video has valid dimensions (allow some time for stream to initialize)
     if (videoRef.current.videoWidth === 0 || videoRef.current.videoHeight === 0) {
       // Wait a bit and try again
@@ -1082,64 +1221,64 @@ export default function MobileScanner() {
         return;
       }
     }
-    
+
     // Stop any active scanning
     stopScanning();
-    
+
     try {
       // Create canvas to capture current frame
       const canvas = document.createElement('canvas');
       canvas.width = videoRef.current.videoWidth;
       canvas.height = videoRef.current.videoHeight;
       const ctx = canvas.getContext('2d');
-      
+
       if (!ctx) {
         addNotification('error', 'Capture failed', 'Could not create canvas context');
         return;
       }
-      
+
       // Draw current video frame to canvas
       ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
-      
+
       // Convert canvas to blob
       canvas.toBlob(async (blob) => {
         if (!blob) {
           addNotification('error', 'Capture failed', 'Could not convert image to blob');
           return;
         }
-        
+
         try {
           setIsLoading(true);
           setScanStatus('loading');
-          
+
           // Send to API (don't save yet)
           console.log('📤 Sending image to API for scanning...', {
             blobSize: blob.size,
             blobType: blob.type,
             timestamp: new Date().toISOString()
           });
-          
+
           const apiResult = await scanBoardingPassAPI(blob);
-          
+
           console.log('📥 API response received:', {
             success: apiResult.success,
             hasDecodedText: !!apiResult.decodedText,
             scanType: apiResult.scanType,
             timestamp: new Date().toISOString()
           });
-          
+
           if (apiResult.success && apiResult.decodedText) {
             console.log('API scan result:', apiResult);
             setScanStatus('success');
             const scanType = apiResult.scanType || 'Barcode';
             const decodedText = apiResult.decodedText;
-            
+
             // Parse the decoded text
             const boardingPassData = parseBoardingPass(decodedText);
-            
+
             // Match with flight details
             const matchResult = matchPassenger(boardingPassData);
-            
+
             // Create scan result
             const scanData = {
               id: Date.now().toString(),
@@ -1155,24 +1294,24 @@ export default function MobileScanner() {
               matched: matchResult.matched,
               matchedPassenger: matchResult.passenger
             };
-            
+
             // If matched, add to scanned passengers
             if (matchResult.matched && matchResult.matchKey) {
               setScannedPassengers(prev => new Set([...prev, matchResult.matchKey!]));
             }
-            
+
             // Add to recent scans (save all scans, no limit)
             setRecentScans(prev => [scanData, ...prev]);
-            
+
             // Display result
             setScanResult(scanData);
-            
+
             if (matchResult.matched) {
               addNotification('success', `${scanType} scan successful!`, `Matched: ${matchResult.passenger?.passengerName || boardingPassData.passengerName}`);
             } else {
               addNotification('warning', `${scanType} scan successful!`, `Not found in flight manifest: ${boardingPassData.passengerName || boardingPassData.flightNumber || 'Boarding pass'}`);
             }
-            
+
             // Clear result after 2 seconds to be ready for next capture
             setTimeout(() => {
               setScanResult(null);
@@ -1193,23 +1332,23 @@ export default function MobileScanner() {
               // }
             }, 2000);
           }
-          } catch (apiError) {
+        } catch (apiError) {
           console.error('API scan error:', apiError);
           setScanStatus('error');
           const errorMessage = apiError instanceof Error ? apiError.message : String(apiError);
           addNotification('error', 'API Error', `Failed to scan: ${errorMessage}`);
           // Still ready for next capture even on error
           setTimeout(() => {
-              setScanStatus(null);
-              // if (streamRef.current && isScanning && videoRef.current) {
-              //   addNotification('info', 'Ready for next scan', 'Camera ready to capture again');
-              // }
-           }, 2000);
+            setScanStatus(null);
+            // if (streamRef.current && isScanning && videoRef.current) {
+            //   addNotification('info', 'Ready for next scan', 'Camera ready to capture again');
+            // }
+          }, 2000);
         } finally {
           setIsLoading(false);
         }
       }, 'image/jpeg', 0.9);
-      
+
     } catch (error) {
       console.error('Error capturing and scanning:', error);
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -1241,17 +1380,17 @@ export default function MobileScanner() {
   return (
     <div className="min-h-screen bg-[#1e3a5f] flex flex-col">
       <Header activeTab="mobile-scanner" />
-      
+
       {/* Notifications */}
       <div className="fixed top-20 right-4 z-50 space-y-2 max-w-sm w-full sm:max-w-md">
         {notifications.map((notification) => {
-          const bgColor = 
+          const bgColor =
             notification.type === 'success' ? 'bg-green-500' :
-            notification.type === 'error' ? 'bg-red-500' :
-            notification.type === 'warning' ? 'bg-yellow-500' :
-            'bg-blue-500';
-          
-          const icon = 
+              notification.type === 'error' ? 'bg-red-500' :
+                notification.type === 'warning' ? 'bg-yellow-500' :
+                  'bg-blue-500';
+
+          const icon =
             notification.type === 'success' ? (
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
@@ -1269,7 +1408,7 @@ export default function MobileScanner() {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
             );
-          
+
           return (
             <div
               key={notification.id}
@@ -1296,9 +1435,9 @@ export default function MobileScanner() {
           );
         })}
       </div>
-      
-      <main className="flex-1 flex items-center justify-center px-2 sm:px-4 py-4 sm:py-8 bg-blue-900">
-        <div className="bg-white rounded-xl sm:rounded-2xl shadow-2xl w-full max-w-md sm:max-w-lg md:max-w-2xl lg:max-w-4xl p-4 sm:p-6">
+
+      <main className="flex-1 flex items-center justify-center px-2 sm:px-4 py-4 sm:py-8 bg-white">
+        <div className="bg-white rounded-xl sm:rounded-2xl border border-gray-200 border-shadow-2xl shadow-2xl w-full max-w-md sm:max-w-lg md:max-w-2xl lg:max-w-4xl p-4 sm:p-6">
           {/* Flight Selection View */}
           {currentView === 'flight-selection' && (
             <div className="flex flex-col items-center justify-center min-h-[500px] py-8">
@@ -1399,16 +1538,16 @@ export default function MobileScanner() {
                   className="w-full bg-gray-300 text-gray-500 px-6 py-4 rounded-lg font-semibold text-base transition-colors disabled:cursor-not-allowed disabled:hover:bg-gray-300 enabled:bg-[#00A651] enabled:text-white enabled:hover:bg-[#008a43] flex items-center justify-center gap-2"
                 >
                   <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
-                    <rect x="3" y="3" width="6" height="6" rx="1"/>
-                    <rect x="3" y="15" width="6" height="6" rx="1"/>
-                    <rect x="15" y="3" width="6" height="6" rx="1"/>
-                    <rect x="15" y="15" width="6" height="6" rx="1"/>
+                    <rect x="3" y="3" width="6" height="6" rx="1" />
+                    <rect x="3" y="15" width="6" height="6" rx="1" />
+                    <rect x="15" y="3" width="6" height="6" rx="1" />
+                    <rect x="15" y="15" width="6" height="6" rx="1" />
                   </svg>
                   <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
-                    <rect x="3" y="3" width="6" height="6" rx="1"/>
-                    <rect x="3" y="15" width="6" height="6" rx="1"/>
-                    <rect x="15" y="3" width="6" height="6" rx="1"/>
-                    <rect x="15" y="15" width="6" height="6" rx="1"/>
+                    <rect x="3" y="3" width="6" height="6" rx="1" />
+                    <rect x="3" y="15" width="6" height="6" rx="1" />
+                    <rect x="15" y="3" width="6" height="6" rx="1" />
+                    <rect x="15" y="15" width="6" height="6" rx="1" />
                   </svg>
                   <span>Start Scanning</span>
                 </button>
@@ -1417,55 +1556,55 @@ export default function MobileScanner() {
                 <div className="flex items-center justify-between mt-8 pt-6 border-t border-gray-200">
                   <div className="flex items-center gap-2 text-sm text-gray-500">
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      {/* <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /> */}
                     </svg>
-                    <span className="hover:text-gray-700 cursor-pointer">Need help? Contact support</span>
+                    {/* <span className="hover:text-gray-700 cursor-pointer">Need help? Contact support</span> */}
                   </div>
-                  <span className="text-sm text-gray-500">v2.4.1</span>
+                  {/* <span className="text-sm text-gray-500">v2.4.1</span> */}
                 </div>
               </div>
             </div>
           )}
 
           {/* Camera View */}
-          {currentView === 'camera' && (
+          {currentView === 'camera' && flightDetails && (
             <>
-              {/* Status Bar with Station and Flight Info */}
-              <div className="flex items-center justify-between mb-4 text-sm text-gray-600">
-                <div className="flex items-center gap-3">
-                  <span>{new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                  {flightDetails && (
-                    <div className="flex items-center gap-2 text-xs">
-                      <span className="font-semibold">ET{flightDetails.flightNumber}</span>
-                      <span className="text-gray-400">•</span>
-                      <span>{flightDetails.totalPassengers} Total</span>
-                    </div>
-                  )}
+              {/* Disembarkation Progress bg-gray-50 rounded-lg p-4 border border-gray-200  */}
+              <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
+                <div className="flex items-center justify-between mb-3">
+                  <div>
+                    <h3 className="text-lg font-semibold text-gray-500 mb-1">Disembarkation Progress
+                      <span className="text-sm text-gray-500 ml-2">{formattedRoute}</span>
+
+                    </h3>
+                    <p className="text-sm text-gray-600">Visualizing scanned passengers against the target.</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-2xl font-bold text-gray-500">
+                      {flightDetails.disembarkingPassengerCount > 0
+                        ? Math.round((scannedPassengers.size / flightDetails.disembarkingPassengerCount) * 100)
+                        : 0}%
+                    </p>
+                    <p className="text-xs text-gray-600">
+                      {scannedPassengers.size}/{flightDetails.disembarkingPassengerCount} Completed
+                    </p>
+                  </div>
                 </div>
-                <div className="flex items-center gap-3">
-                  {/* Station Display */}
-                  <div className="flex items-center gap-2 bg-[#00A651] text-white px-3 py-1.5 rounded-lg font-semibold">
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
-                    </svg>
-                    <span>{station}</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0" />
-                    </svg>
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-                    </svg>
-                  </div>
+                <div className="w-full bg-gray-700 rounded-full h-3 overflow-hidden">
+                  <div
+                    className="bg-[#00A651] h-full rounded-full transition-all duration-300"
+                    style={{
+                      width: `${flightDetails.disembarkingPassengerCount > 0
+                        ? (scannedPassengers.size / flightDetails.disembarkingPassengerCount) * 100
+                        : 0}%`
+                    }}
+                  ></div>
                 </div>
               </div>
-
-              {/* Disembarking Passengers Status */}
-              {flightDetails && (
-                <div className="mb-4 bg-gray-50 rounded-lg p-3 border border-gray-200">
-                  <div className="flex items-center justify-between">
+              {/* Remaining Passengers Section - Above Camera */}
+              <div className="mb-4 mt-2">
+                <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
+                  <div className="flex items-center justify-between mb-3">
                     <div className="flex items-center gap-4">
                       <div>
                         <p className="text-xs text-gray-500 mb-0.5">Disembarking</p>
@@ -1474,23 +1613,15 @@ export default function MobileScanner() {
                       <div className="w-px h-8 bg-gray-300"></div>
                       <div>
                         <p className="text-xs text-gray-500 mb-0.5">Scanned & Matched</p>
-                        <p className={`text-lg font-bold ${scannedPassengers.size === flightDetails.disembarkingPassengerCount ? 'text-[#00A651]' : 'text-orange-600'}`}>
+                        <p className={`text-lg font-bold ${scannedPassengers.size === flightDetails.disembarkingPassengerCount ? 'text-[#00A651]' : 'text-red-600'}`}>
                           {scannedPassengers.size}
                         </p>
                       </div>
-                      {scannedPassengers.size === flightDetails.disembarkingPassengerCount && (
-                        <div className="flex items-center gap-1 text-[#00A651]">
-                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                          </svg>
-                          <span className="text-sm font-semibold">All Passengers Scanned</span>
-                        </div>
-                      )}
                     </div>
                     {flightDetails.disembarkingPassengerCount > scannedPassengers.size && (
                       <button
                         onClick={() => setShowRemainingPassengers(!showRemainingPassengers)}
-                        className="text-sm text-blue-600 hover:text-blue-800 font-semibold flex items-center gap-1"
+                        className="text-sm text-[#00A651] hover:text-[#008a43] font-semibold flex items-center gap-1"
                       >
                         <span>View Remaining ({flightDetails.disembarkingPassengerCount - scannedPassengers.size})</span>
                         <svg className={`w-4 h-4 transition-transform ${showRemainingPassengers ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1499,24 +1630,24 @@ export default function MobileScanner() {
                       </button>
                     )}
                   </div>
-                  
+
                   {/* Remaining Passengers List */}
                   {showRemainingPassengers && flightDetails.disembarkingPassengerCount > scannedPassengers.size && (
                     <div className="mt-3 pt-3 border-t border-gray-200">
                       <p className="text-xs font-semibold text-gray-700 mb-2">Remaining Passengers:</p>
                       <div className="space-y-2 max-h-48 overflow-y-auto">
                         {flightDetails.disembarkingPassengers
-                          .filter((p: any) => {
+                          ?.filter((p: any) => {
                             const matchKey = `${p.pnrLocator || ''}_${p.seat || ''}`.toUpperCase();
                             return !scannedPassengers.has(matchKey);
                           })
                           .map((passenger: any, index: number) => (
-                            <div key={index} className="bg-white rounded p-2 border border-gray-200">
+                            <div key={index} className="bg-white rounded p-3 border border-gray-200">
                               <div className="flex items-center justify-between">
                                 <div>
-                                  <p className="text-sm font-semibold text-gray-900">{passenger.passengerName}</p>
+                                  <p className="text-sm font-semibold text-gray-900">{passenger.passengerName || passenger.name || 'Unknown'}</p>
                                   <div className="flex items-center gap-3 mt-1">
-                                    <span className="text-xs text-gray-600">Seat: {passenger.seat}</span>
+                                    <span className="text-xs text-gray-600">Seat: {passenger.seat || 'N/A'}</span>
                                     {passenger.pnrLocator && (
                                       <span className="text-xs text-gray-600">PNR: {passenger.pnrLocator}</span>
                                     )}
@@ -1524,12 +1655,15 @@ export default function MobileScanner() {
                                 </div>
                               </div>
                             </div>
-                          ))}
+                          )) || (
+                            <p className="text-sm text-gray-500 text-center py-2">No remaining passengers data available</p>
+                          )}
                       </div>
                     </div>
                   )}
                 </div>
-              )}
+              </div>
+
 
               {/* Permission Prompt Overlay */}
               {showPermissionPrompt && cameraPermission !== 'granted' && (
@@ -1544,7 +1678,7 @@ export default function MobileScanner() {
                       </div>
                       <h3 className="text-xl font-bold text-gray-900 mb-2">Camera Permission Required</h3>
                       <p className="text-sm text-gray-600 mb-4">
-                        {cameraPermission === 'denied' 
+                        {cameraPermission === 'denied'
                           ? 'Camera access was denied. Please allow camera access in your browser settings to continue scanning.'
                           : 'We need access to your camera to scan boarding passes. Please allow camera access when prompted.'}
                       </p>
@@ -1614,7 +1748,7 @@ export default function MobileScanner() {
 
               {/* Camera Scanner Frame - using ZXing */}
               <div className="relative mb-4 sm:mb-6">
-                <div className="bg-gray-900 rounded-lg overflow-hidden aspect-square flex items-center justify-center relative min-h-[250px] sm:min-h-[300px] md:min-h-[400px]">
+                <div className="bg-gray-900 rounded-lg overflow-hidden aspect-video flex items-center justify-center relative h-[220px] sm:h-[280px] md:h-[480px] min-h-[180px] sm:min-h-[220px] md:min-h-[300px]">
                   {/* Video element - ID required by ZXing decodeFromVideoDevice */}
                   <video
                     ref={videoRef}
@@ -1634,7 +1768,7 @@ export default function MobileScanner() {
                       }
                     }}
                   />
-                  
+
                   {/* Corner markers - white brackets */}
                   {isScanning && (
                     <>
@@ -1642,7 +1776,7 @@ export default function MobileScanner() {
                       <div className="absolute top-2 right-2 sm:top-4 sm:right-4 w-8 h-8 sm:w-12 sm:h-12 border-t-2 sm:border-t-4 border-r-2 sm:border-r-4 border-white rounded-tr-lg z-10"></div>
                       <div className="absolute bottom-2 left-2 sm:bottom-4 sm:left-4 w-8 h-8 sm:w-12 sm:h-12 border-b-2 sm:border-b-4 border-l-2 sm:border-l-4 border-white rounded-bl-lg z-10"></div>
                       <div className="absolute bottom-2 right-2 sm:bottom-4 sm:right-4 w-8 h-8 sm:w-12 sm:h-12 border-b-2 sm:border-b-4 border-r-2 sm:border-r-4 border-white rounded-br-lg z-10"></div>
-                      
+
                       {/* Scanning indicator */}
                       {!scanResult && (
                         <div className="absolute top-4 left-1/2 transform -translate-x-1/2 z-10">
@@ -1654,7 +1788,7 @@ export default function MobileScanner() {
                       )}
                     </>
                   )}
-                  
+
                   {/* Placeholder when camera is off */}
                   {!isScanning && (
                     <div className="text-white text-center p-8 z-10">
@@ -1669,13 +1803,12 @@ export default function MobileScanner() {
                   {/* Status Overlay - Loading, Success, or Error */}
                   {scanStatus && (
                     <div className="absolute inset-0 bg-black bg-opacity-60 flex items-center justify-center z-20 rounded-lg">
-                      <div className={`rounded-xl p-6 sm:p-8 shadow-2xl max-w-xs w-full mx-4 ${
-                        scanStatus === 'success' 
-                          ? 'bg-[#00A651]' // ET Green
-                          : scanStatus === 'error'
+                      <div className={`rounded-xl p-6 sm:p-8 shadow-2xl max-w-xs w-full mx-4 ${scanStatus === 'success'
+                        ? 'bg-[#00A651]' // ET Green
+                        : scanStatus === 'error'
                           ? 'bg-red-600'
                           : 'bg-white'
-                      }`}>
+                        }`}>
                         <div className="flex flex-col items-center">
                           {scanStatus === 'loading' && (
                             <>
@@ -1718,7 +1851,7 @@ export default function MobileScanner() {
                   )}
 
                 </div>
-                
+
                 {/* Button Group - Native Camera and Web Camera */}
                 {!isScanning && !scanResult && (
                   <div className="absolute -bottom-4 sm:-bottom-6 left-1/2 transform -translate-x-1/2 flex items-center gap-3 z-10">
@@ -1733,7 +1866,7 @@ export default function MobileScanner() {
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
                       </svg>
                     </button>
-                    
+
                     {/* Web Camera Button */}
                     <button
                       onClick={() => {
@@ -1748,7 +1881,7 @@ export default function MobileScanner() {
                     </button>
                   </div>
                 )}
-                
+
                 {/* Capture & Scan Button - Fallback when camera is active */}
                 {isScanning && !scanResult && (
                   <button
@@ -1763,8 +1896,357 @@ export default function MobileScanner() {
                   </button>
                 )}
               </div>
+              {/* Instructions */}
+              <div className="text-center text-sm text-gray-600 space-y-1 mt-4">
+                <p>
+                  {isScanning
+                    ? 'Point camera at boarding pass barcode and tap the green button to capture & scan'
+                    : 'Tap the purple button for native camera or blue button for web camera'}
+                </p>
+              </div>
+              {/* Everything else below camera */}
+              <div className="mt-6 space-y-6">
 
-              
+
+                {/* Header Section */}
+                <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center gap-3">
+                      <span className="px-3 py-1 bg-[#00A651] text-gray-900 rounded-full text-xs font-semibold">IN PROGRESS</span>
+                      <span className="text-sm text-gray-800">{new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {/* <button className="px-3 py-1.5 text-sm text-gray-300 hover:text-white hover:bg-gray-700 rounded-lg transition-colors flex items-center gap-2">
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        Pause Feed
+                      </button> */}
+                      <button className="px-4 py-1.5 bg-[#00A651] text-white rounded-lg text-sm font-semibold hover:bg-[#008a43] transition-colors flex items-center gap-2">
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                        </svg>
+                        Close Flight
+                      </button>
+                    </div>
+                  </div>
+                  <div>
+                    <h2 className="text-2xl font-bold text-gray-700 mb-1">Flight ET-{flightDetails.flightNumber}</h2>
+                    <div className="flex items-center gap-4 text-sm text-gray-500">
+                      <span>{formattedRoute}</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Key Metrics Cards */}
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                  {/* Total Passengers */}
+                  <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs text-gray-700 uppercase font-semibold">Total Passengers</span>
+                      <svg className="w-5 h-5 text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                      </svg>
+                    </div>
+                    <p className="text-3xl font-bold text-gray-900 mb-1">{flightDetails.totalPassengers}</p>
+                    <p className="text-xs text-gray-500">Manifest verified</p>
+                  </div>
+
+                  {/* Disembarking Target */}
+                  <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs text-gray-800 uppercase font-semibold">Disembarking Target</span>
+                      <svg className="w-5 h-5 text-gray-800" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                      </svg>
+                    </div>
+                    <p className="text-3xl font-bold text-gray-900 mb-1">{flightDetails.disembarkingPassengerCount}</p>
+                    <p className="text-xs text-gray-500">Destined for {userStation}</p>
+                  </div>
+
+                  {/* Scanned & Matched */}
+                  <div className="bg-[#00A651] rounded-lg p-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs text-white uppercase font-semibold">Scanned & Matched</span>
+                      <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                    </div>
+                    <p className="text-3xl font-bold text-white mb-1">{scannedPassengers.size}</p>
+                    <p className="text-xs text-white/80">
+                      {scansInLast5Minutes > 0 ? `+${scansInLast5Minutes} in last 5m` : 'No scans in last 5m'}
+                    </p>
+                  </div>
+
+                  {/* Remaining */}
+                  <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs text-gray-800 uppercase font-semibold">Remaining</span>
+                      <svg className="w-5 h-5 text-gray-800" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                    </div>
+                    <p className="text-3xl font-bold text-gray-700 mb-1">{Math.max(0, flightDetails.disembarkingPassengerCount - scannedPassengers.size)}</p>
+                    <p className="text-xs text-gray-500 flex items-center gap-1">
+                      <span className="w-2 h-2 bg-orange-500 rounded-full"></span>
+                      Awaiting scan
+                    </p>
+                  </div>
+                </div>
+
+                {/* Recent Activity Feed */}
+                <div className="bg-gray-800 rounded-lg p-4">
+                  <div className="flex items-center justify-between mb-4">
+                    <div>
+                      <h3 className="text-lg font-semibold text-white mb-1">Recent Activity Feed</h3>
+                      <p className="text-sm text-gray-400">Real-time log of passenger scan events.</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button className="px-3 py-1.5 text-sm text-gray-300 hover:text-white hover:bg-gray-700 rounded-lg transition-colors flex items-center gap-2">
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                        </svg>
+                        Export
+                      </button>
+                      <button className="px-3 py-1.5 text-sm text-[#00A651] hover:text-[#008a43] font-semibold flex items-center gap-2">
+                        View Full Log
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                        </svg>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Search and Filter Bar */}
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-4">
+                    <div className="relative">
+                      <div className="absolute left-3 top-1/2 transform -translate-y-1/2">
+                        <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                        </svg>
+                      </div>
+                      <input
+                        type="text"
+                        placeholder="Name or PNR..."
+                        value={activitySearchQuery}
+                        onChange={(e) => setActivitySearchQuery(e.target.value)}
+                        className="w-full pl-10 pr-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#00A651] focus:border-transparent"
+                      />
+                    </div>
+                    <select 
+                      value={activityScanTypeFilter}
+                      onChange={(e) => setActivityScanTypeFilter(e.target.value)}
+                      className="px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-[#00A651] focus:border-transparent"
+                    >
+                      <option value="all">All Types</option>
+                      <option value="boarding-pass">Boarding Pass</option>
+                      <option value="manual">Manual</option>
+                    </select>
+                    <select className="px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-[#00A651] focus:border-transparent">
+                      <option>All Statuses</option>
+                      <option>Matched</option>
+                      <option>Pending</option>
+                    </select>
+                    <div className="flex items-center gap-2">
+                      <div className="flex-1 relative">
+                        <div className="absolute left-3 top-1/2 transform -translate-y-1/2">
+                          <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          </svg>
+                        </div>
+                        <input
+                          type="text"
+                          placeholder="10:00 AM"
+                          className="w-full pl-10 pr-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#00A651] focus:border-transparent"
+                        />
+                      </div>
+                      <span className="text-gray-400 text-sm">TO</span>
+                      <div className="flex-1 relative">
+                        <div className="absolute left-3 top-1/2 transform -translate-y-1/2">
+                          <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                          </svg>
+                        </div>
+                        <input
+                          type="text"
+                          placeholder="--:--"
+                          className="w-full pl-10 pr-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#00A651] focus:border-transparent"
+                        />
+                      </div>
+                      <button className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors">
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                        </svg>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Activity Table */}
+                  <div className="overflow-x-auto">
+                    <table className="w-full">
+                      <thead>
+                        <tr className="border-b border-gray-700">
+                          <th className="text-left py-2 px-3 text-xs font-semibold text-gray-400 uppercase">Passenger Name</th>
+                          <th className="text-left py-2 px-3 text-xs font-semibold text-gray-400 uppercase">PNR Locator</th>
+                          <th className="text-left py-2 px-3 text-xs font-semibold text-gray-400 uppercase">Seat</th>
+                          <th className="text-left py-2 px-3 text-xs font-semibold text-gray-400 uppercase">Scan Type</th>
+                          <th className="text-left py-2 px-3 text-xs font-semibold text-gray-400 uppercase">Status</th>
+                          <th className="text-left py-2 px-3 text-xs font-semibold text-gray-400 uppercase">Scanned At</th>
+                          <th className="text-right py-2 px-3 text-xs font-semibold text-gray-400 uppercase">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {flightDetails?.disembarkingPassengers
+                          ?.filter((passenger: any) => {
+                            // Filter by search query (name or PNR)
+                            if (activitySearchQuery) {
+                              const query = activitySearchQuery.toLowerCase();
+                              const nameMatch = (passenger.passengerName || passenger.name || '').toLowerCase().includes(query);
+                              const pnrMatch = (passenger.pnrLocator || '').toLowerCase().includes(query);
+                              if (!nameMatch && !pnrMatch) return false;
+                            }
+                            
+                            // Filter by scan type
+                            if (activityScanTypeFilter !== 'all') {
+                              const matchKey = `${passenger.pnrLocator || ''}_${passenger.seat || ''}`.toUpperCase();
+                              const isScanned = scannedPassengers.has(matchKey);
+                              
+                              if (activityScanTypeFilter === 'manual') {
+                                const scanRecord = recentScans.find((scan: any) => {
+                                  const scanMatchKey = scan.matchedPassenger 
+                                    ? `${scan.matchedPassenger.pnrLocator || ''}_${scan.matchedPassenger.seat || ''}`.toUpperCase()
+                                    : null;
+                                  return scanMatchKey === matchKey && scan.scanType === 'manual';
+                                });
+                                if (!scanRecord) return false;
+                              } else if (activityScanTypeFilter === 'boarding-pass') {
+                                const scanRecord = recentScans.find((scan: any) => {
+                                  const scanMatchKey = scan.matchedPassenger 
+                                    ? `${scan.matchedPassenger.pnrLocator || ''}_${scan.matchedPassenger.seat || ''}`.toUpperCase()
+                                    : null;
+                                  return scanMatchKey === matchKey && scan.scanType !== 'manual' && scan.scanType !== 'passport';
+                                });
+                                if (!scanRecord) return false;
+                              }
+                            }
+                            
+                            return true;
+                          })
+                          .map((passenger: any, index: number) => {
+                          const matchKey = `${passenger.pnrLocator || ''}_${passenger.seat || ''}`.toUpperCase();
+                          const isScanned = scannedPassengers.has(matchKey);
+                          
+                          // Find corresponding scan record if exists
+                          const scanRecord = recentScans.find((scan: any) => {
+                            const scanMatchKey = scan.matchedPassenger 
+                              ? `${scan.matchedPassenger.pnrLocator || ''}_${scan.matchedPassenger.seat || ''}`.toUpperCase()
+                              : null;
+                            return scanMatchKey === matchKey;
+                          });
+
+                          const passengerName = passenger.passengerName || passenger.name || 'Unknown';
+                          const initials = passengerName.split(' ').map((n: string) => n[0]).join('').toUpperCase() || 'NA';
+                          const colors = ['bg-blue-500', 'bg-purple-500', 'bg-orange-500', 'bg-green-500', 'bg-pink-500'];
+                          
+                          return (
+                            <tr key={index} className="border-b border-gray-700 hover:bg-gray-700/50 transition-colors">
+                              <td className="py-3 px-3">
+                                <div className="flex items-center gap-2">
+                                  <div className={`w-8 h-8 ${colors[index % colors.length]} rounded-full flex items-center justify-center text-white text-xs font-semibold`}>
+                                    {initials}
+                                  </div>
+                                  <span className="text-white text-sm">{passengerName}</span>
+                                </div>
+                              </td>
+                              <td className="py-3 px-3 text-gray-300 text-sm">{passenger.pnrLocator || 'N/A'}</td>
+                              <td className="py-3 px-3 text-gray-300 text-sm">{passenger.seat || 'N/A'}</td>
+                              <td className="py-3 px-3">
+                                {scanRecord ? (
+                                  <span className="text-gray-300 text-sm flex items-center gap-1">
+                                    {scanRecord.scanType === 'passport' ? (
+                                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V8a2 2 0 00-2-2h-5m-4 0V5a2 2 0 114 0v1m-4 0a2 2 0 104 0m-5 8a2 2 0 100-4 2 2 0 000 4zm0 0c1.306 0 2.417.835 2.83 2M9 14a3.001 3.001 0 00-2.83 2M15 11h3m-3 4h2" />
+                                      </svg>
+                                    ) : scanRecord.scanType === 'manual' ? (
+                                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                                      </svg>
+                                    ) : (
+                                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                                      </svg>
+                                    )}
+                                    {scanRecord.scanType === 'passport' ? 'Passport' : scanRecord.scanType === 'manual' ? 'Manual' : 'Boarding Pass'}
+                                  </span>
+                                ) : (
+                                  <span className="text-gray-500 text-sm">Not Scanned</span>
+                                )}
+                              </td>
+                              <td className="py-3 px-3">
+                                {isScanned ? (
+                                  <span className="flex items-center gap-1.5">
+                                    <span className="w-2 h-2 bg-[#00A651] rounded-full"></span>
+                                    <span className="text-[#00A651] text-sm">Matched</span>
+                                  </span>
+                                ) : (
+                                  <span className="flex items-center gap-1.5">
+                                    <span className="w-2 h-2 bg-orange-500 rounded-full"></span>
+                                    <span className="text-orange-500 text-sm">Pending</span>
+                                  </span>
+                                )}
+                              </td>
+                              <td className="py-3 px-3 text-gray-300 text-sm">
+                                {scanRecord?.scannedAt ? new Date(scanRecord.scannedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'N/A'}
+                              </td>
+                              <td className="py-3 px-3 text-right">
+                                {!isScanned ? (
+                                  <button
+                                    onClick={() => handleManualMatch(passenger)}
+                                    disabled={isLoading}
+                                    className="px-3 py-1.5 bg-[#00A651] hover:bg-[#008a43] disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-lg transition-colors flex items-center gap-1"
+                                    title="Manually match passenger"
+                                  >
+                                    {isLoading ? (
+                                      <>
+                                        <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                        </svg>
+                                        Processing...
+                                      </>
+                                    ) : (
+                                      <>
+                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                                        </svg>
+                                        Match
+                                      </>
+                                    )}
+                                  </button>
+                                ) : (
+                                  <button className="text-gray-400 hover:text-white">
+                                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
+                                    </svg>
+                                  </button>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                        {(!flightDetails?.disembarkingPassengers || flightDetails.disembarkingPassengers.length === 0) && (
+                          <tr>
+                            <td colSpan={7} className="py-8 text-center text-gray-400 text-sm">
+                              No disembarking passengers available. Select a flight to see passengers.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+
               {/* Current Scan Result - Below Camera */}
               {scanResult && scanResult.success && scanResult.boardingPass && (
                 <div className="mt-4 sm:mt-6 bg-green-50 border-2 border-green-200 rounded-lg p-4 sm:p-6">
@@ -1779,7 +2261,7 @@ export default function MobileScanner() {
                       <p className="text-xs text-gray-600">{scanResult.scanTime} • {scanResult.source}</p>
                     </div>
                   </div>
-                  
+
                   {/* Boarding Pass Details */}
                   <div className="bg-white rounded-lg p-4 space-y-3">
                     {scanResult.boardingPass.passengerName && (
@@ -1788,7 +2270,7 @@ export default function MobileScanner() {
                         <p className="text-base font-semibold text-gray-900">{scanResult.boardingPass.passengerName}</p>
                       </div>
                     )}
-                    
+
                     <div className="grid grid-cols-2 gap-3">
                       {scanResult.boardingPass.flightNumber && (
                         <div>
@@ -1796,21 +2278,21 @@ export default function MobileScanner() {
                           <p className="text-sm font-semibold text-gray-900">{scanResult.boardingPass.flightNumber}</p>
                         </div>
                       )}
-                      
+
                       {scanResult.boardingPass.seat && (
                         <div>
                           <p className="text-xs text-gray-500 uppercase mb-1">Seat</p>
                           <p className="text-sm font-semibold text-gray-900">{scanResult.boardingPass.seat}</p>
                         </div>
                       )}
-                      
+
                       {scanResult.boardingPass.date && (
                         <div>
                           <p className="text-xs text-gray-500 uppercase mb-1">Date</p>
                           <p className="text-sm font-semibold text-gray-900">{scanResult.boardingPass.date}</p>
                         </div>
                       )}
-                      
+
                       {scanResult.boardingPass.pnr && (
                         <div>
                           <p className="text-xs text-gray-500 uppercase mb-1">PNR</p>
@@ -1818,14 +2300,14 @@ export default function MobileScanner() {
                         </div>
                       )}
                     </div>
-                    
+
                     {scanResult.boardingPass.airline && (
                       <div>
                         <p className="text-xs text-gray-500 uppercase mb-1">Airline</p>
                         <p className="text-sm font-semibold text-gray-900">{scanResult.boardingPass.airline}</p>
                       </div>
                     )}
-                    
+
                     {/* Show raw barcode if no structured data found */}
                     {!scanResult.boardingPass.passengerName && !scanResult.boardingPass.flightNumber && (
                       <div>
@@ -1839,14 +2321,7 @@ export default function MobileScanner() {
                 </div>
               )}
 
-              {/* Instructions */}
-              <div className="text-center text-sm text-gray-600 space-y-1 mt-4">
-                <p>
-                  {isScanning 
-                    ? 'Point camera at boarding pass barcode and tap the green button to capture & scan' 
-                    : 'Tap the purple button for native camera or blue button for web camera'}
-                </p>
-              </div>
+
 
               {/* Recent Scans - Below Camera */}
               <div className="mt-6 sm:mt-8">

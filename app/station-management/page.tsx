@@ -28,6 +28,9 @@ export default function StationManagement() {
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [selectedStation, setSelectedStation] = useState<any>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [searchQuery, setSearchQuery] = useState('');
+  const itemsPerPage = 8;
 
   const createValidation = useFormValidation(createStationSchema);
   const updateValidation = useFormValidation(updateStationSchema);
@@ -72,7 +75,8 @@ export default function StationManagement() {
       });
       addNotification('success', 'Station Created', 'Station has been created successfully');
       setIsCreateModalOpen(false);
-      setCreateForm({ code: '', name: '', city: '', country: '' });
+      const nextCode = getNextStationCode();
+      setCreateForm({ code: nextCode, name: '', city: '', country: '' });
       createValidation.clearErrors();
     } catch (error: any) {
       addNotification('error', 'Create Failed', error.message || 'Failed to create station');
@@ -122,6 +126,54 @@ export default function StationManagement() {
     }
   };
 
+  // Filter stations based on search query
+  const filteredStations = stations?.filter((station) => {
+    if (!searchQuery) return true;
+    const query = searchQuery.toLowerCase();
+    return (
+      station.code?.toLowerCase().includes(query) ||
+      station.name?.toLowerCase().includes(query) ||
+      station.city?.toLowerCase().includes(query) ||
+      station.country?.toLowerCase().includes(query)
+    );
+  }) || [];
+
+  // Pagination calculations
+  const totalStations = filteredStations.length;
+  const totalPages = Math.ceil(totalStations / itemsPerPage);
+  const startIndex = (currentPage - 1) * itemsPerPage;
+  const endIndex = startIndex + itemsPerPage;
+  const paginatedStations = filteredStations.slice(startIndex, endIndex);
+
+  const handlePageChange = (page: number) => {
+    setCurrentPage(page);
+  };
+
+  // Auto-increment station code
+  const getNextStationCode = () => {
+    if (!stations || stations.length === 0) return '001';
+    
+    // Extract numeric codes and find the highest
+    const numericCodes = stations
+      .map((s) => {
+        const match = s.code?.match(/\d+/);
+        return match ? parseInt(match[0], 10) : 0;
+      })
+      .filter((n) => n > 0);
+    
+    const maxCode = numericCodes.length > 0 ? Math.max(...numericCodes) : 0;
+    const nextCode = maxCode + 1;
+    
+    // Format as 3-digit code (001, 002, etc.)
+    return nextCode.toString().padStart(3, '0');
+  };
+
+  const handleOpenCreateModal = () => {
+    const nextCode = getNextStationCode();
+    setCreateForm({ code: nextCode, name: '', city: '', country: '' });
+    setIsCreateModalOpen(true);
+  };
+
   return (
     <div className="min-h-screen bg-[#f5f7fa] flex flex-col">
       <Header activeTab="master-data" />
@@ -131,12 +183,33 @@ export default function StationManagement() {
         <div className="max-w-7xl mx-auto">
           <div className="flex items-center justify-between mb-6">
             <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Station Management</h1>
-            <Button onClick={() => setIsCreateModalOpen(true)}>
+            <Button onClick={handleOpenCreateModal}>
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
               </svg>
               Add Station
             </Button>
+          </div>
+
+          {/* Search Bar */}
+          <div className="mb-6">
+            <div className="relative">
+              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                <svg className="h-5 w-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+              </div>
+              <input
+                type="text"
+                placeholder="Search by code, name, city, or country..."
+                value={searchQuery}
+                onChange={(e) => {
+                  setSearchQuery(e.target.value);
+                  setCurrentPage(1); // Reset to first page on search
+                }}
+                className="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#00A651] focus:border-transparent text-sm"
+              />
+            </div>
           </div>
 
           {isLoading ? (
@@ -158,7 +231,7 @@ export default function StationManagement() {
                     </tr>
                   </thead>
                   <tbody className="bg-white divide-y divide-gray-200">
-                    {stations?.map((station) => (
+                    {paginatedStations.map((station) => (
                       <tr key={station.id} className={`hover:bg-gray-50 transition-colors ${!station.isActive ? 'opacity-50' : ''}`}>
                         <td className="px-6 py-4 whitespace-nowrap">
                           <span className="inline-flex items-center px-3 py-1.5 rounded-md bg-gray-100 text-gray-900 text-sm font-bold tracking-wider">
@@ -225,6 +298,54 @@ export default function StationManagement() {
                   </tbody>
                 </table>
               </div>
+              {stations && stations.length > 0 && (
+                <div className="bg-gray-50 px-6 py-4 border-t border-gray-200 flex items-center justify-between">
+                  <div className="text-sm text-gray-600">
+                    Showing <span className="font-semibold">{startIndex + 1}</span> to <span className="font-semibold">{Math.min(endIndex, totalStations)}</span> of <span className="font-semibold">{totalStations}</span> stations
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => handlePageChange(currentPage - 1)}
+                      disabled={currentPage === 1}
+                      className="px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-200 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Previous
+                    </button>
+                    {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => {
+                      // Show first page, last page, current page, and pages around current
+                      if (
+                        page === 1 ||
+                        page === totalPages ||
+                        (page >= currentPage - 1 && page <= currentPage + 1)
+                      ) {
+                        return (
+                          <button
+                            key={page}
+                            onClick={() => handlePageChange(page)}
+                            className={`px-3 py-1.5 text-sm font-medium rounded-lg transition-colors ${
+                              currentPage === page
+                                ? 'bg-[#00A651] text-white'
+                                : 'text-gray-700 hover:bg-gray-200'
+                            }`}
+                          >
+                            {page}
+                          </button>
+                        );
+                      } else if (page === currentPage - 2 || page === currentPage + 2) {
+                        return <span key={page} className="px-2 text-gray-500">...</span>;
+                      }
+                      return null;
+                    })}
+                    <button
+                      onClick={() => handlePageChange(currentPage + 1)}
+                      disabled={currentPage === totalPages}
+                      className="px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-200 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Next
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -235,7 +356,8 @@ export default function StationManagement() {
         isOpen={isCreateModalOpen}
         onClose={() => {
           setIsCreateModalOpen(false);
-          setCreateForm({ code: '', name: '', city: '', country: '' });
+          const nextCode = getNextStationCode();
+          setCreateForm({ code: nextCode, name: '', city: '', country: '' });
           createValidation.clearErrors();
         }}
         title="Create Station"
@@ -245,7 +367,8 @@ export default function StationManagement() {
               variant="outline"
               onClick={() => {
                 setIsCreateModalOpen(false);
-                setCreateForm({ code: '', name: '', city: '', country: '' });
+                const nextCode = getNextStationCode();
+                setCreateForm({ code: nextCode, name: '', city: '', country: '' });
                 createValidation.clearErrors();
               }}
             >
