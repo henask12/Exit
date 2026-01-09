@@ -31,7 +31,11 @@ export default function MobileScanner() {
   const [showRemainingPassengers, setShowRemainingPassengers] = useState(false);
   const [activitySearchQuery, setActivitySearchQuery] = useState('');
   const [activityScanTypeFilter, setActivityScanTypeFilter] = useState<string>('all');
+  const [activityStatusFilter, setActivityStatusFilter] = useState<string>('all');
   const [flightProgress, setFlightProgress] = useState<any>(null);
+  const [activityData, setActivityData] = useState<any>(null);
+  const [activityPage, setActivityPage] = useState(1);
+  const [isLoadingActivity, setIsLoadingActivity] = useState(false);
 
   // Calculate scans in the last 5 minutes
   const scansInLast5Minutes = useMemo(() => {
@@ -71,6 +75,45 @@ export default function MobileScanner() {
       console.error('Error fetching flight progress:', error);
     }
   }, [flightNumber, flightDate, station]);
+
+  // Fetch activity feed
+  const fetchActivityFeed = useCallback(async (page: number = 1) => {
+    setIsLoadingActivity(true);
+    try {
+      const params = new URLSearchParams({
+        page: page.toString(),
+        pageSize: '8',
+      });
+
+      // Add status filter if not 'all'
+      if (activityStatusFilter !== 'all') {
+        params.append('status', activityStatusFilter);
+      }
+
+      // Add flight number filter if available
+      if (flightNumber) {
+        params.append('flightNumber', flightNumber.toString());
+      }
+
+      // Add station filter if available
+      if (station) {
+        params.append('station', station);
+      }
+
+      const response = await apiCall(`/Flight/activity?${params.toString()}`);
+      if (response.ok) {
+        const data = await response.json();
+        setActivityData(data);
+      } else {
+        throw new Error('Failed to fetch activity feed');
+      }
+    } catch (error: any) {
+      console.error('Error fetching activity feed:', error);
+      addNotification('error', 'Failed to load activity', error.message || 'Could not fetch activity feed');
+    } finally {
+      setIsLoadingActivity(false);
+    }
+  }, [activityStatusFilter, flightNumber, station]);
 
   // Manually match a passenger (when boarding pass is not found)
   const handleManualMatch = async (passenger: any) => {
@@ -1015,6 +1058,20 @@ export default function MobileScanner() {
       return () => clearInterval(interval);
     }
   }, [flightNumber, flightDate, station, currentView, fetchFlightProgress]);
+
+  // Effect to fetch activity feed when filters or page change
+  useEffect(() => {
+    if (currentView === 'camera') {
+      fetchActivityFeed(activityPage);
+    }
+  }, [activityPage, activityStatusFilter, currentView, fetchActivityFeed]);
+
+  // Reset to page 1 when status filter changes
+  useEffect(() => {
+    if (activityStatusFilter !== 'all') {
+      setActivityPage(1);
+    }
+  }, [activityStatusFilter]);
 
   // Send image to API for scanning
   const scanBoardingPassAPI = async (imageBlob: Blob): Promise<any> => {
@@ -2002,20 +2059,6 @@ export default function MobileScanner() {
                       <h3 className="text-lg font-semibold text-white mb-1">Recent Activity Feed</h3>
                       <p className="text-sm text-gray-400">Real-time log of passenger scan events.</p>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <button className="px-3 py-1.5 text-sm text-gray-300 hover:text-white hover:bg-gray-700 rounded-lg transition-colors flex items-center gap-2">
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                        </svg>
-                        Export
-                      </button>
-                      <button className="px-3 py-1.5 text-sm text-[#00A651] hover:text-[#008a43] font-semibold flex items-center gap-2">
-                        View Full Log
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                        </svg>
-                      </button>
-                    </div>
                   </div>
 
                   {/* Search and Filter Bar */}
@@ -2043,10 +2086,14 @@ export default function MobileScanner() {
                       <option value="boarding-pass">Boarding Pass</option>
                       <option value="manual">Manual</option>
                     </select>
-                    <select className="px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-[#00A651] focus:border-transparent">
-                      <option>All Statuses</option>
-                      <option>Matched</option>
-                      <option>Pending</option>
+                    <select 
+                      value={activityStatusFilter}
+                      onChange={(e) => setActivityStatusFilter(e.target.value)}
+                      className="px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-[#00A651] focus:border-transparent"
+                    >
+                      <option value="all">All Statuses</option>
+                      <option value="matched">Matched</option>
+                      <option value="unmatched">Unmatched</option>
                     </select>
                     <div className="flex items-center gap-2">
                       <div className="flex-1 relative">
@@ -2084,166 +2131,178 @@ export default function MobileScanner() {
 
                   {/* Activity Table */}
                   <div className="overflow-x-auto">
-                    <table className="w-full">
-                      <thead>
-                        <tr className="border-b border-gray-700">
-                          <th className="text-left py-2 px-3 text-xs font-semibold text-gray-400 uppercase">Passenger Name</th>
-                          <th className="text-left py-2 px-3 text-xs font-semibold text-gray-400 uppercase">PNR Locator</th>
-                          <th className="text-left py-2 px-3 text-xs font-semibold text-gray-400 uppercase">Seat</th>
-                          <th className="text-left py-2 px-3 text-xs font-semibold text-gray-400 uppercase">Scan Type</th>
-                          <th className="text-left py-2 px-3 text-xs font-semibold text-gray-400 uppercase">Status</th>
-                          <th className="text-left py-2 px-3 text-xs font-semibold text-gray-400 uppercase">Scanned At</th>
-                          <th className="text-right py-2 px-3 text-xs font-semibold text-gray-400 uppercase">Action</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {flightDetails?.disembarkingPassengers
-                          ?.filter((passenger: any) => {
-                            // Filter by search query (name or PNR)
-                            if (activitySearchQuery) {
-                              const query = activitySearchQuery.toLowerCase();
-                              const nameMatch = (passenger.passengerName || passenger.name || '').toLowerCase().includes(query);
-                              const pnrMatch = (passenger.pnrLocator || '').toLowerCase().includes(query);
-                              if (!nameMatch && !pnrMatch) return false;
-                            }
-                            
-                            // Filter by scan type
-                            if (activityScanTypeFilter !== 'all') {
-                              const matchKey = `${passenger.pnrLocator || ''}_${passenger.seat || ''}`.toUpperCase();
-                              const isScanned = scannedPassengers.has(matchKey);
-                              
-                              if (activityScanTypeFilter === 'manual') {
-                                const scanRecord = recentScans.find((scan: any) => {
-                                  const scanMatchKey = scan.matchedPassenger 
-                                    ? `${scan.matchedPassenger.pnrLocator || ''}_${scan.matchedPassenger.seat || ''}`.toUpperCase()
-                                    : null;
-                                  return scanMatchKey === matchKey && scan.scanType === 'manual';
-                                });
-                                if (!scanRecord) return false;
-                              } else if (activityScanTypeFilter === 'boarding-pass') {
-                                const scanRecord = recentScans.find((scan: any) => {
-                                  const scanMatchKey = scan.matchedPassenger 
-                                    ? `${scan.matchedPassenger.pnrLocator || ''}_${scan.matchedPassenger.seat || ''}`.toUpperCase()
-                                    : null;
-                                  return scanMatchKey === matchKey && scan.scanType !== 'manual' && scan.scanType !== 'passport';
-                                });
-                                if (!scanRecord) return false;
-                              }
-                            }
-                            
-                            return true;
-                          })
-                          .map((passenger: any, index: number) => {
-                          const matchKey = `${passenger.pnrLocator || ''}_${passenger.seat || ''}`.toUpperCase();
-                          const isScanned = scannedPassengers.has(matchKey);
-                          
-                          // Find corresponding scan record if exists
-                          const scanRecord = recentScans.find((scan: any) => {
-                            const scanMatchKey = scan.matchedPassenger 
-                              ? `${scan.matchedPassenger.pnrLocator || ''}_${scan.matchedPassenger.seat || ''}`.toUpperCase()
-                              : null;
-                            return scanMatchKey === matchKey;
-                          });
-
-                          const passengerName = passenger.passengerName || passenger.name || 'Unknown';
-                          const initials = passengerName.split(' ').map((n: string) => n[0]).join('').toUpperCase() || 'NA';
-                          const colors = ['bg-blue-500', 'bg-purple-500', 'bg-orange-500', 'bg-green-500', 'bg-pink-500'];
-                          
-                          return (
-                            <tr key={index} className="border-b border-gray-700 hover:bg-gray-700/50 transition-colors">
-                              <td className="py-3 px-3">
-                                <div className="flex items-center gap-2">
-                                  <div className={`w-8 h-8 ${colors[index % colors.length]} rounded-full flex items-center justify-center text-white text-xs font-semibold`}>
-                                    {initials}
-                                  </div>
-                                  <span className="text-white text-sm">{passengerName}</span>
-                                </div>
-                              </td>
-                              <td className="py-3 px-3 text-gray-300 text-sm">{passenger.pnrLocator || 'N/A'}</td>
-                              <td className="py-3 px-3 text-gray-300 text-sm">{passenger.seat || 'N/A'}</td>
-                              <td className="py-3 px-3">
-                                {scanRecord ? (
-                                  <span className="text-gray-300 text-sm flex items-center gap-1">
-                                    {scanRecord.scanType === 'passport' ? (
-                                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V8a2 2 0 00-2-2h-5m-4 0V5a2 2 0 114 0v1m-4 0a2 2 0 104 0m-5 8a2 2 0 100-4 2 2 0 000 4zm0 0c1.306 0 2.417.835 2.83 2M9 14a3.001 3.001 0 00-2.83 2M15 11h3m-3 4h2" />
-                                      </svg>
-                                    ) : scanRecord.scanType === 'manual' ? (
-                                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                                      </svg>
-                                    ) : (
-                                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                                      </svg>
-                                    )}
-                                    {scanRecord.scanType === 'passport' ? 'Passport' : scanRecord.scanType === 'manual' ? 'Manual' : 'Boarding Pass'}
-                                  </span>
-                                ) : (
-                                  <span className="text-gray-500 text-sm">Not Scanned</span>
-                                )}
-                              </td>
-                              <td className="py-3 px-3">
-                                {isScanned ? (
-                                  <span className="flex items-center gap-1.5">
-                                    <span className="w-2 h-2 bg-[#00A651] rounded-full"></span>
-                                    <span className="text-[#00A651] text-sm">Matched</span>
-                                  </span>
-                                ) : (
-                                  <span className="flex items-center gap-1.5">
-                                    <span className="w-2 h-2 bg-orange-500 rounded-full"></span>
-                                    <span className="text-orange-500 text-sm">Pending</span>
-                                  </span>
-                                )}
-                              </td>
-                              <td className="py-3 px-3 text-gray-300 text-sm">
-                                {scanRecord?.scannedAt ? new Date(scanRecord.scannedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'N/A'}
-                              </td>
-                              <td className="py-3 px-3 text-right">
-                                {!isScanned ? (
-                                  <button
-                                    onClick={() => handleManualMatch(passenger)}
-                                    disabled={isLoading}
-                                    className="px-3 py-1.5 bg-[#00A651] hover:bg-[#008a43] disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-lg transition-colors flex items-center gap-1"
-                                    title="Manually match passenger"
-                                  >
-                                    {isLoading ? (
-                                      <>
-                                        <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                                        </svg>
-                                        Processing...
-                                      </>
-                                    ) : (
-                                      <>
-                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                                        </svg>
-                                        Match
-                                      </>
-                                    )}
-                                  </button>
-                                ) : (
-                                  <button className="text-gray-400 hover:text-white">
-                                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
-                                    </svg>
-                                  </button>
-                                )}
-                              </td>
+                    {isLoadingActivity ? (
+                      <div className="flex items-center justify-center py-12">
+                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#00A651]"></div>
+                      </div>
+                    ) : activityData?.events && activityData.events.length > 0 ? (
+                      <>
+                        <table className="w-full">
+                          <thead>
+                            <tr className="border-b border-gray-700">
+                              <th className="text-left py-2 px-3 text-xs font-semibold text-gray-400 uppercase">Passenger Name</th>
+                              <th className="text-left py-2 px-3 text-xs font-semibold text-gray-400 uppercase">Flight</th>
+                              <th className="text-left py-2 px-3 text-xs font-semibold text-gray-400 uppercase">Scan Type</th>
+                              <th className="text-left py-2 px-3 text-xs font-semibold text-gray-400 uppercase">Status</th>
+                              <th className="text-left py-2 px-3 text-xs font-semibold text-gray-400 uppercase">Scanned At</th>
+                              <th className="text-left py-2 px-3 text-xs font-semibold text-gray-400 uppercase">Time Ago</th>
                             </tr>
-                          );
-                        })}
-                        {(!flightDetails?.disembarkingPassengers || flightDetails.disembarkingPassengers.length === 0) && (
-                          <tr>
-                            <td colSpan={7} className="py-8 text-center text-gray-400 text-sm">
-                              No disembarking passengers available. Select a flight to see passengers.
-                            </td>
-                          </tr>
+                          </thead>
+                          <tbody>
+                            {activityData.events
+                              .filter((event: any) => {
+                                // Client-side search filter (name)
+                                if (activitySearchQuery) {
+                                  const query = activitySearchQuery.toLowerCase();
+                                  const nameMatch = (event.passengerName || '').toLowerCase().includes(query);
+                                  if (!nameMatch) return false;
+                                }
+                                
+                                // Client-side scan type filter
+                                if (activityScanTypeFilter !== 'all') {
+                                  const scanType = (event.scanType || '').toLowerCase();
+                                  if (activityScanTypeFilter === 'manual' && scanType !== 'manual') return false;
+                                  if (activityScanTypeFilter === 'boarding-pass' && scanType !== 'barcode' && scanType !== 'boarding pass') return false;
+                                }
+                                
+                                return true;
+                              })
+                              .map((event: any, index: number) => {
+                                const passengerName = event.passengerName || 'Unknown';
+                                const initials = passengerName.split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2) || 'NA';
+                                const colors = ['bg-blue-500', 'bg-purple-500', 'bg-orange-500', 'bg-green-500', 'bg-pink-500'];
+                                const isMatched = event.matched === true || event.alertStatus === 'matched';
+                                
+                                return (
+                                  <tr key={event.id || index} className="border-b border-gray-700 hover:bg-gray-700/50 transition-colors">
+                                    <td className="py-3 px-3">
+                                      <div className="flex items-center gap-2">
+                                        <div className={`w-8 h-8 ${colors[index % colors.length]} rounded-full flex items-center justify-center text-white text-xs font-semibold`}>
+                                          {initials}
+                                        </div>
+                                        <span className="text-white text-sm">{passengerName}</span>
+                                      </div>
+                                    </td>
+                                    <td className="py-3 px-3 text-gray-300 text-sm">
+                                      <div className="flex flex-col">
+                                        <span className="font-semibold">ET-{event.flightNumber}</span>
+                                        <span className="text-xs text-gray-400">{event.route || 'N/A'}</span>
+                                      </div>
+                                    </td>
+                                    <td className="py-3 px-3">
+                                      <span className="text-gray-300 text-sm flex items-center gap-1">
+                                        {event.scanType === 'Barcode' || event.scanType === 'barcode' ? (
+                                          <>
+                                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                                            </svg>
+                                            Boarding Pass
+                                          </>
+                                        ) : event.scanType === 'Manual' || event.scanType === 'manual' ? (
+                                          <>
+                                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                                            </svg>
+                                            Manual
+                                          </>
+                                        ) : (
+                                          <>
+                                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V8a2 2 0 00-2-2h-5m-4 0V5a2 2 0 114 0v1m-4 0a2 2 0 104 0m-5 8a2 2 0 100-4 2 2 0 000 4zm0 0c1.306 0 2.417.835 2.83 2M9 14a3.001 3.001 0 00-2.83 2M15 11h3m-3 4h2" />
+                                            </svg>
+                                            {event.scanType || 'Unknown'}
+                                          </>
+                                        )}
+                                      </span>
+                                    </td>
+                                    <td className="py-3 px-3">
+                                      {isMatched ? (
+                                        <span className="flex items-center gap-1.5">
+                                          <span className="w-2 h-2 bg-[#00A651] rounded-full"></span>
+                                          <span className="text-[#00A651] text-sm">Matched</span>
+                                        </span>
+                                      ) : (
+                                        <span className="flex items-center gap-1.5">
+                                          <span className="w-2 h-2 bg-orange-500 rounded-full"></span>
+                                          <span className="text-orange-500 text-sm">Unmatched</span>
+                                        </span>
+                                      )}
+                                    </td>
+                                    <td className="py-3 px-3 text-gray-300 text-sm">
+                                      {event.scannedAt ? new Date(event.scannedAt).toLocaleString([], { 
+                                        month: 'short', 
+                                        day: 'numeric', 
+                                        hour: '2-digit', 
+                                        minute: '2-digit' 
+                                      }) : 'N/A'}
+                                    </td>
+                                    <td className="py-3 px-3 text-gray-400 text-sm">
+                                      {event.timeAgo || 'N/A'}
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                          </tbody>
+                        </table>
+                        
+                        {/* Pagination */}
+                        {activityData.totalPages > 1 && (
+                          <div className="flex items-center justify-between mt-4 pt-4 border-t border-gray-700">
+                            <div className="text-sm text-gray-400">
+                              Showing {((activityPage - 1) * 8) + 1} to {Math.min(activityPage * 8, activityData.totalCount)} of {activityData.totalCount} events
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <button
+                                onClick={() => setActivityPage(prev => Math.max(1, prev - 1))}
+                                disabled={!activityData.hasPreviousPage || isLoadingActivity}
+                                className="px-3 py-1.5 text-sm bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-500 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
+                              >
+                                Previous
+                              </button>
+                              <div className="flex items-center gap-1">
+                                {Array.from({ length: Math.min(5, activityData.totalPages) }, (_, i) => {
+                                  let pageNum;
+                                  if (activityData.totalPages <= 5) {
+                                    pageNum = i + 1;
+                                  } else if (activityPage <= 3) {
+                                    pageNum = i + 1;
+                                  } else if (activityPage >= activityData.totalPages - 2) {
+                                    pageNum = activityData.totalPages - 4 + i;
+                                  } else {
+                                    pageNum = activityPage - 2 + i;
+                                  }
+                                  return (
+                                    <button
+                                      key={pageNum}
+                                      onClick={() => setActivityPage(pageNum)}
+                                      disabled={isLoadingActivity}
+                                      className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
+                                        activityPage === pageNum
+                                          ? 'bg-[#00A651] text-white'
+                                          : 'bg-gray-700 hover:bg-gray-600 text-white'
+                                      } disabled:opacity-50 disabled:cursor-not-allowed`}
+                                    >
+                                      {pageNum}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                              <button
+                                onClick={() => setActivityPage(prev => prev + 1)}
+                                disabled={!activityData.hasNextPage || isLoadingActivity}
+                                className="px-3 py-1.5 text-sm bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-500 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
+                              >
+                                Next
+                              </button>
+                            </div>
+                          </div>
                         )}
-                      </tbody>
-                    </table>
+                      </>
+                    ) : (
+                      <div className="text-center py-12 text-gray-400">
+                        <p>No activity events found</p>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
