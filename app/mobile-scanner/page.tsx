@@ -25,6 +25,8 @@ export default function MobileScanner() {
   const [flightDate, setFlightDate] = useState<string>('');
   const [flightNumbers, setFlightNumbers] = useState<Array<number>>([]);
   const [isLoadingFlights, setIsLoadingFlights] = useState(false);
+  const [flightNumberQuery, setFlightNumberQuery] = useState<string>('');
+  const [showFlightNumberDropdown, setShowFlightNumberDropdown] = useState(false);
   const [flightDetails, setFlightDetails] = useState<any>(null);
   const [scannedPassengers, setScannedPassengers] = useState<Set<string>>(new Set());
   const [showRemainingPassengers, setShowRemainingPassengers] = useState(false);
@@ -36,6 +38,40 @@ export default function MobileScanner() {
   const [activityPage, setActivityPage] = useState(1);
   const [isLoadingActivity, setIsLoadingActivity] = useState(false);
   const [userStationCode, setUserStationCode] = useState<string>('');
+  const flightNumberDropdownRef = useRef<HTMLDivElement>(null);
+
+  const filteredFlightNumbers = useMemo(() => {
+    const q = flightNumberQuery.trim();
+    if (!q) return flightNumbers;
+    return flightNumbers.filter((f) => String(f).includes(q));
+  }, [flightNumbers, flightNumberQuery]);
+
+  // Close flight number dropdown on outside click
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      if (!showFlightNumberDropdown) return;
+      if (flightNumberDropdownRef.current && !flightNumberDropdownRef.current.contains(e.target as Node)) {
+        setShowFlightNumberDropdown(false);
+      }
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [showFlightNumberDropdown]);
+
+  // Add notification (memoized so it doesn't trigger render loops via useCallback deps)
+  const addNotification = useCallback(
+    (type: 'success' | 'error' | 'warning' | 'info', message: string, details?: string) => {
+      const id = Date.now().toString() + Math.random().toString(36).substr(2, 9);
+      setNotifications((prev) => [...prev, { id, type, message, details }]);
+
+      // Auto-remove after 5 seconds for success/info, 8 seconds for error/warning
+      const timeout = type === 'error' || type === 'warning' ? 8000 : 5000;
+      setTimeout(() => {
+        setNotifications((prev) => prev.filter((n) => n.id !== id));
+      }, timeout);
+    },
+    []
+  );
 
   // Calculate scans in the last 5 minutes
   const scansInLast5Minutes = useMemo(() => {
@@ -109,8 +145,14 @@ export default function MobileScanner() {
         params.append('station', station);
       }
 
+      // Add date filter if available (required by backend for correct activity scoping)
+      if (flightDate) {
+        const dateStr = flightDate.split('T')[0];
+        params.append('date', dateStr);
+      }
+      
+
       const response = await apiCall(`/Flight/activity?${params.toString()}`);
-      console.log({params})
       if (response.ok) {
         const data = await response.json();
         setActivityData(data);
@@ -123,7 +165,7 @@ export default function MobileScanner() {
     } finally {
       setIsLoadingActivity(false);
     }
-  }, [activityStatusFilter, flightNumber, station]);
+  }, [activityStatusFilter, flightNumber, station, flightDate, addNotification]);
 
   // Manually match a passenger (when boarding pass is not found)
   const handleManualMatch = async (passenger: any) => {
@@ -270,17 +312,6 @@ export default function MobileScanner() {
     };
   }, []);
 
-  // Add notification
-  const addNotification = (type: 'success' | 'error' | 'warning' | 'info', message: string, details?: string) => {
-    const id = Date.now().toString() + Math.random().toString(36).substr(2, 9);
-    setNotifications(prev => [...prev, { id, type, message, details }]);
-
-    // Auto-remove after 5 seconds for success/info, 8 seconds for error/warning
-    const timeout = type === 'error' || type === 'warning' ? 8000 : 5000;
-    setTimeout(() => {
-      setNotifications(prev => prev.filter(n => n.id !== id));
-    }, timeout);
-  };
 
   // Remove notification
   const removeNotification = (id: string) => {
@@ -1545,6 +1576,8 @@ export default function MobileScanner() {
                       onChange={(e) => {
                         setFlightDate(e.target.value);
                         setFlightNumber(''); // Reset flight number when date changes
+                        setFlightNumberQuery('');
+                        setShowFlightNumberDropdown(false);
                       }}
                       className="w-full pl-10 pr-10 py-3 border border-gray-300 rounded-lg text-base text-gray-700 focus:outline-none focus:ring-2 focus:ring-[#00A651] focus:border-[#00A651] appearance-none bg-white"
                     >
@@ -1566,32 +1599,92 @@ export default function MobileScanner() {
                 {/* Flight Number Dropdown */}
                 <div>
                   <label className="block text-sm font-semibold text-gray-700 mb-2">Flight Number</label>
-                  <div className="relative">
+                  <div className="relative" ref={flightNumberDropdownRef}>
                     <div className="absolute left-3 top-1/2 transform -translate-y-1/2">
                       <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
                       </svg>
                     </div>
-                    <select
-                      value={flightNumber}
-                      onChange={(e) => setFlightNumber(e.target.value)}
+                    <input
+                      type="text"
+                      value={flightNumberQuery}
+                      onChange={(e) => {
+                        setFlightNumberQuery(e.target.value);
+                        setShowFlightNumberDropdown(true);
+                        // If user clears input, clear selection too
+                        if (!e.target.value) setFlightNumber('');
+                      }}
+                      onFocus={() => {
+                        if (flightDate && !isLoadingFlights) setShowFlightNumberDropdown(true);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          const first = filteredFlightNumbers[0];
+                          if (first !== undefined) {
+                            const v = String(first);
+                            setFlightNumber(v);
+                            setFlightNumberQuery(v);
+                            setShowFlightNumberDropdown(false);
+                          }
+                        }
+                        if (e.key === 'Escape') {
+                          setShowFlightNumberDropdown(false);
+                        }
+                      }}
                       disabled={!flightDate || isLoadingFlights}
-                      className="w-full pl-10 pr-10 py-3 border border-gray-300 rounded-lg text-base text-gray-700 focus:outline-none focus:ring-2 focus:ring-[#00A651] focus:border-[#00A651] appearance-none bg-white disabled:bg-gray-100 disabled:cursor-not-allowed disabled:text-gray-400"
-                    >
-                      <option value="">
-                        {isLoadingFlights ? 'Loading flights...' : !flightDate ? 'Select date first' : 'Select Flight'}
-                      </option>
-                      {flightNumbers.map((flight, index) => (
-                        <option key={index} value={String(flight)}>
-                          {flight}
-                        </option>
-                      ))}
-                    </select>
+                      placeholder={
+                        isLoadingFlights
+                          ? 'Loading flights...'
+                          : !flightDate
+                          ? 'Select date first'
+                          : 'Search flight number...'
+                      }
+                      className="w-full pl-10 pr-10 py-3 border border-gray-300 rounded-lg text-base text-gray-700 focus:outline-none focus:ring-2 focus:ring-[#00A651] focus:border-[#00A651] bg-white disabled:bg-gray-100 disabled:cursor-not-allowed disabled:text-gray-400"
+                    />
                     <div className="absolute right-3 top-1/2 transform -translate-y-1/2 pointer-events-none">
                       <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                       </svg>
                     </div>
+
+                    {showFlightNumberDropdown && flightDate && !isLoadingFlights && (
+                      <div className="absolute top-full left-0 mt-2 w-full bg-white border border-gray-200 rounded-lg shadow-xl z-50 overflow-hidden">
+                        <div className="max-h-60 overflow-auto">
+                          {filteredFlightNumbers.length === 0 ? (
+                            <div className="px-4 py-3 text-sm text-gray-500">
+                              No flights found{flightNumberQuery.trim() ? ` for "${flightNumberQuery.trim()}"` : ''}.
+                            </div>
+                          ) : (
+                            filteredFlightNumbers.slice(0, 50).map((flight, index) => {
+                              const v = String(flight);
+                              const selected = v === flightNumber;
+                              return (
+                                <button
+                                  key={`${v}-${index}`}
+                                  type="button"
+                                  onClick={() => {
+                                    setFlightNumber(v);
+                                    setFlightNumberQuery(v);
+                                    setShowFlightNumberDropdown(false);
+                                  }}
+                                  className={`w-full text-left px-4 py-3 text-sm transition-colors ${
+                                    selected ? 'bg-green-50 text-[#00A651] font-semibold' : 'text-gray-800 hover:bg-gray-50'
+                                  }`}
+                                >
+                                  {v}
+                                </button>
+                              );
+                            })
+                          )}
+                        </div>
+                        {filteredFlightNumbers.length > 50 && (
+                          <div className="px-4 py-2 text-xs text-gray-500 border-t border-gray-200">
+                            Showing first 50 results. Refine your search.
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                   {!flightDate && (
                     <p className="mt-1 text-xs text-gray-500 italic">* Available flights will appear after selecting a date.</p>

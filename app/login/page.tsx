@@ -143,7 +143,7 @@ export default function LoginPage() {
               />
               <span className="ml-2 text-sm text-gray-500">Remember me</span>
             </label>
-            <a href="#" className="text-sm text-[#00A651] hover:text-[#008a43] transition-colors">
+            <a href="/forgot-password" className="text-sm text-[#00A651] hover:text-[#008a43] transition-colors">
               Forgot password?
             </a>
           </div>

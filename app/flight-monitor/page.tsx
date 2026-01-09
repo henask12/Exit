@@ -86,7 +86,9 @@ export default function FlightMonitor() {
     
     setIsLoadingAlerts(true);
     try {
-      const response = await apiCall(`/Flight/activity?status=unmatched&page=1&station=${station}`);
+      const response = await apiCall(
+        `/Flight/activity?status=unmatched&page=1&station=${station}&date=${selectedDate}`
+      );
       if (response.ok) {
         const data = await response.json();
         // Get first 3 unmatched events for recent alerts
@@ -98,7 +100,7 @@ export default function FlightMonitor() {
     } finally {
       setIsLoadingAlerts(false);
     }
-  }, [station]);
+  }, [station, selectedDate]);
 
   useEffect(() => {
     fetchRecentAlerts();

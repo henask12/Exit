@@ -140,6 +140,78 @@ export const authAPI = {
   logout: async (): Promise<void> => {
     await auth.clearAuth();
   },
+
+  /**
+   * Public auth flows (no access token required).
+   * These go through BFF routes (not /api/proxy) so they work when logged out.
+   */
+  forgotPassword: async (employeeId: string, email?: string): Promise<{ message: string }> => {
+    const res = await fetch('/api/auth/forgot-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify(email ? { employeeId, email } : { employeeId }),
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      throw new Error(data?.error || 'Failed to request password reset');
+    }
+    return data as { message: string };
+  },
+
+  resetPassword: async (
+    employeeId: string,
+    token: string,
+    newPassword: string
+  ): Promise<{ message: string }> => {
+    const res = await fetch('/api/auth/reset-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ employeeId, token, newPassword }),
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      throw new Error(data?.error || 'Failed to reset password');
+    }
+    return data as { message: string };
+  },
+
+  /**
+   * Authenticated password change (requires cookie session)
+   */
+  changePassword: async (
+    currentPassword: string,
+    newPassword: string
+  ): Promise<{ message: string }> => {
+    const res = await apiCall('/Auth/change-password', {
+      method: 'POST',
+      body: JSON.stringify({ currentPassword, newPassword }),
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      throw new Error(data?.error || data?.message || 'Failed to change password');
+    }
+    return data as { message: string };
+  },
+
+  /**
+   * Admin-only reset (authenticated; no email token)
+   */
+  adminResetPassword: async (
+    employeeId: string,
+    newPassword: string
+  ): Promise<{ message: string }> => {
+    const res = await apiCall('/Auth/admin-reset-password', {
+      method: 'POST',
+      body: JSON.stringify({ employeeId, newPassword }),
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      throw new Error(data?.error || data?.message || 'Failed to reset password');
+    }
+    return data as { message: string };
+  },
 };
 
 // ---- Entity APIs (used by React Query hooks) ----

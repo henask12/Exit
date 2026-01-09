@@ -54,7 +54,8 @@ export default function Home() {
     setIsLoadingAlerts(true);
     setAlertsError(null);
     try {
-      const response = await apiCall('/Flight/activity?status=unmatched&page=1');
+      const today = new Date().toISOString().split('T')[0];
+      const response = await apiCall(`/Flight/activity?status=unmatched&page=1&date=${today}`);
       if (response.ok) {
         const data = await response.json().catch(() => null);
         // Ensure we only show truly unmatched items (some backends may ignore the filter)

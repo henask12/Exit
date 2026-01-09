@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 
@@ -9,6 +10,7 @@ interface HeaderProps {
 }
 
 export default function Header({ activeTab = 'operations' }: HeaderProps) {
+  const router = useRouter();
   const { user, logout } = useAuth();
   const [showMasterData, setShowMasterData] = useState(false);
   const [showAccountManagement, setShowAccountManagement] = useState(false);
@@ -24,6 +26,8 @@ export default function Header({ activeTab = 'operations' }: HeaderProps) {
     setMounted(true);
     setUserData(user || null);
   }, [user]);
+
+  const isAdmin = (userData?.role || user?.role || '').toString().toLowerCase() === 'admin';
 
   // Close dropdowns when clicking outside
   useEffect(() => {
@@ -240,7 +244,7 @@ export default function Header({ activeTab = 'operations' }: HeaderProps) {
                       <button
                         onClick={() => {
                           setShowProfileMenu(false);
-                          // Navigate to profile page if exists, or handle profile action
+                          router.push('/profile');
                         }}
                         className="block w-full text-left px-4 py-3 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
                       >
@@ -251,6 +255,27 @@ export default function Header({ activeTab = 'operations' }: HeaderProps) {
                           Profile
                         </div>
                       </button>
+                      {isAdmin && (
+                        <button
+                          onClick={() => {
+                            setShowProfileMenu(false);
+                            router.push('/profile#admin-reset-password');
+                          }}
+                          className="block w-full text-left px-4 py-3 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
+                        >
+                          <div className="flex items-center gap-2">
+                            <svg className="w-4 h-4 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={2}
+                                d="M12 11V7a4 4 0 118 0v4m-8 0h8m-8 0H6a2 2 0 00-2 2v6a2 2 0 002 2h12a2 2 0 002-2v-6a2 2 0 00-2-2"
+                              />
+                            </svg>
+                            Reset Password
+                          </div>
+                        </button>
+                      )}
                       <button
                         onClick={() => {
                           setShowProfileMenu(false);
