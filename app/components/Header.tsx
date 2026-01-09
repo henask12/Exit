@@ -3,7 +3,6 @@
 import Link from 'next/link';
 import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '@/hooks/useAuth';
-import { auth } from '@/lib/auth';
 
 interface HeaderProps {
   activeTab?: 'operations' | 'mobile-scanner' | 'integration-health' | 'settings' | 'master-data' | 'account-management';
@@ -23,8 +22,7 @@ export default function Header({ activeTab = 'operations' }: HeaderProps) {
   // Only get user data on client side to avoid hydration mismatch
   useEffect(() => {
     setMounted(true);
-    const currentUser = user || auth.getUser();
-    setUserData(currentUser);
+    setUserData(user || null);
   }, [user]);
 
   // Close dropdowns when clicking outside

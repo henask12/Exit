@@ -20,11 +20,15 @@ export default function DiscrepancyManagement() {
 
   // Get user station on mount
   useEffect(() => {
-    const user = auth.getUser();
-    if (user?.station) {
-      const stationCode = typeof user.station === 'string' ? user.station : user.station?.code || '';
-      setStation(stationCode);
-    }
+    let cancelled = false;
+    (async () => {
+      const user = await auth.getUser();
+      if (cancelled) return;
+      setStation(user?.station?.code || '');
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Fetch discrepancy summary

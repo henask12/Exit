@@ -26,11 +26,16 @@ export default function FlightMonitor() {
 
   // Get user station on mount
   useEffect(() => {
-    const user = auth.getUser();
-    if (user?.station) {
-      const stationCode = typeof user.station === 'string' ? user.station : user.station?.code || 'GVA';
+    let cancelled = false;
+    (async () => {
+      const user = await auth.getUser();
+      if (cancelled) return;
+      const stationCode = user?.station?.code || 'GVA';
       setStation(stationCode);
-    }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Fetch flights from API

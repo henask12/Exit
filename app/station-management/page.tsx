@@ -13,11 +13,10 @@ import { useNotifications } from '@/hooks/useNotifications';
 import { useStations, useCreateStation, useUpdateStation, useDeleteStation } from '@/hooks/api/useStations';
 import { useFormValidation } from '@/hooks/useFormValidation';
 import { createStationSchema, updateStationSchema } from '@/lib/validations';
-import { auth } from '@/lib/auth';
 
 export default function StationManagement() {
   const router = useRouter();
-  const { isChecking } = useAuth();
+  const { isChecking, isAuthenticated } = useAuth();
   const { notifications, addNotification, removeNotification } = useNotifications();
   const { data: stations, isLoading } = useStations();
   const createStation = useCreateStation();
@@ -57,7 +56,7 @@ export default function StationManagement() {
     );
   }
 
-  if (!auth.isAuthenticated()) {
+  if (!isAuthenticated) {
     router.push('/login');
     return null;
   }

@@ -5,8 +5,7 @@ import Header from '../components/Header';
 import { BrowserMultiFormatReader } from '@zxing/browser';
 import { NotFoundException, DecodeHintType, BarcodeFormat } from '@zxing/library';
 import { createWorker } from 'tesseract.js';
-import { apiCall } from '@/lib/auth';
-import { auth } from '@/lib/auth';
+import { apiCall, auth } from '@/lib/auth';
 
 type ViewMode = 'flight-selection' | 'camera';
 
@@ -36,6 +35,7 @@ export default function MobileScanner() {
   const [activityData, setActivityData] = useState<any>(null);
   const [activityPage, setActivityPage] = useState(1);
   const [isLoadingActivity, setIsLoadingActivity] = useState(false);
+  const [userStationCode, setUserStationCode] = useState<string>('');
 
   // Calculate scans in the last 5 minutes
   const scansInLast5Minutes = useMemo(() => {
@@ -46,11 +46,20 @@ export default function MobileScanner() {
     }).length;
   }, [recentScans]);
 
-  // Get logged-in user's station
-  const userStation = useMemo(() => {
-    const user = auth.getUser();
-    return user?.station?.code || station || 'N/A';
-  }, [station]);
+  // Get logged-in user's station (cookie session)
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const user = await auth.getUser();
+      if (cancelled) return;
+      setUserStationCode(user?.station?.code || '');
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const userStation = userStationCode || station || 'N/A';
 
   // Format route from API (e.g., "ADD-GVA-MAN" to "ADD → GVA → MAN")
   const formattedRoute = useMemo(() => {
@@ -101,6 +110,7 @@ export default function MobileScanner() {
       }
 
       const response = await apiCall(`/Flight/activity?${params.toString()}`);
+      console.log({params})
       if (response.ok) {
         const data = await response.json();
         setActivityData(data);

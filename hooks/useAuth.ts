@@ -11,10 +11,16 @@ export function useAuth() {
   const [user, setUser] = useState<User | null>(null);
 
   useEffect(() => {
-    const checkAuth = () => {
-      const authenticated = auth.isAuthenticated();
+    let cancelled = false;
+
+    const checkAuth = async () => {
+      setIsChecking(true);
+      const currentUser = await auth.getUser();
+      if (cancelled) return;
+
+      const authenticated = !!currentUser;
       setIsAuthenticated(authenticated);
-      setUser(auth.getUser());
+      setUser(currentUser);
       setIsChecking(false);
 
       if (!authenticated && !window.location.pathname.includes('/login')) {
@@ -23,10 +29,13 @@ export function useAuth() {
     };
 
     checkAuth();
+    return () => {
+      cancelled = true;
+    };
   }, [router]);
 
-  const logout = () => {
-    auth.clearAuth();
+  const logout = async () => {
+    await auth.clearAuth();
     setIsAuthenticated(false);
     setUser(null);
     router.push('/login');

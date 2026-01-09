@@ -15,11 +15,10 @@ import { useStations } from '@/hooks/api/useStations';
 import { useRoles } from '@/hooks/api/useRoles';
 import { useFormValidation } from '@/hooks/useFormValidation';
 import { createUserSchema, updateUserSchema } from '@/lib/validations';
-import { auth } from '@/lib/auth';
 
 export default function UserManagement() {
   const router = useRouter();
-  const { isChecking } = useAuth();
+  const { isChecking, isAuthenticated } = useAuth();
   const { notifications, addNotification, removeNotification } = useNotifications();
   const { data: users, isLoading } = useUsers();
   const { data: stations } = useStations();
@@ -63,7 +62,7 @@ export default function UserManagement() {
     );
   }
 
-  if (!auth.isAuthenticated()) {
+  if (!isAuthenticated) {
     router.push('/login');
     return null;
   }

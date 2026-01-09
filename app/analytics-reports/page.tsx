@@ -29,6 +29,8 @@ export default function AnalyticsReports() {
     setIsLoadingKpis(true);
     try {
       const response = await apiCall('/Flight/analytics/kpis');
+      console.log(response)
+      debugger
       if (response.ok) {
         const data = await response.json();
         // API returns an object with KPI keys (verificationAccuracy, avgProcessingTime, discrepancyRate, systemUptime)
@@ -63,6 +65,8 @@ export default function AnalyticsReports() {
       });
 
       const response = await apiCall(`/Flight/analytics/performance?${params.toString()}`);
+      console.log(response)
+      debugger
       if (response.ok) {
         const data = await response.json();
         const flights = Array.isArray(data) ? data : (data?.flights || []);

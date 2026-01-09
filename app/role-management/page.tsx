@@ -13,11 +13,10 @@ import { useNotifications } from '@/hooks/useNotifications';
 import { useRoles, usePermissions, useCreateRole, useUpdateRole, useDeleteRole, useAssignPermissions } from '@/hooks/api/useRoles';
 import { useFormValidation } from '@/hooks/useFormValidation';
 import { createRoleSchema, updateRoleSchema } from '@/lib/validations';
-import { auth } from '@/lib/auth';
 
 export default function RoleManagement() {
   const router = useRouter();
-  const { isChecking } = useAuth();
+  const { isChecking, isAuthenticated } = useAuth();
   const { notifications, addNotification, removeNotification } = useNotifications();
   const { data: roles, isLoading } = useRoles();
   const { data: permissions } = usePermissions();
@@ -58,7 +57,7 @@ export default function RoleManagement() {
     );
   }
 
-  if (!auth.isAuthenticated()) {
+  if (!isAuthenticated) {
     router.push('/login');
     return null;
   }

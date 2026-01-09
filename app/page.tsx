@@ -13,18 +13,37 @@ export default function Home() {
   const [recentAlerts, setRecentAlerts] = useState<any[]>([]);
   const [isLoadingSummary, setIsLoadingSummary] = useState(false);
   const [isLoadingAlerts, setIsLoadingAlerts] = useState(false);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
+  const [alertsError, setAlertsError] = useState<string | null>(null);
 
   // Fetch summary data
   const fetchSummary = useCallback(async () => {
     setIsLoadingSummary(true);
+    setSummaryError(null);
     try {
       const response = await apiCall('/Flight/activity?page=1');
       if (response.ok) {
-        const data = await response.json();
-        setSummary(data.summary || {});
+        const data = await response.json().catch(() => null);
+        const s =
+          data?.summary ??
+          data?.Summary ??
+          (data &&
+          typeof data === 'object' &&
+          (data.activeTransitFlights !== undefined ||
+            data.passengersVerified !== undefined ||
+            data.verificationAccuracy !== undefined ||
+            data.activeDiscrepancies !== undefined)
+            ? data
+            : null);
+        setSummary(s || {});
+      } else {
+        const err = await response.json().catch(() => ({ error: 'Failed to fetch summary' }));
+        throw new Error(err?.error || err?.message || 'Failed to fetch summary');
       }
     } catch (error) {
       console.error('Error fetching summary:', error);
+      setSummary({});
+      setSummaryError((error as any)?.message || 'Failed to load summary');
     } finally {
       setIsLoadingSummary(false);
     }
@@ -33,18 +52,29 @@ export default function Home() {
   // Fetch recent alerts (unmatched events)
   const fetchRecentAlerts = useCallback(async () => {
     setIsLoadingAlerts(true);
+    setAlertsError(null);
     try {
       const response = await apiCall('/Flight/activity?status=unmatched&page=1');
       if (response.ok) {
-        const data = await response.json();
+        const data = await response.json().catch(() => null);
         // Ensure we only show truly unmatched items (some backends may ignore the filter)
-        const events = Array.isArray(data?.events) ? data.events : [];
+        const events = Array.isArray(data?.events)
+          ? data.events
+          : Array.isArray(data?.items)
+          ? data.items
+          : Array.isArray(data?.data?.events)
+          ? data.data.events
+          : [];
         const unmatchedOnly = events.filter((e: any) => e?.matched === false || e?.alertStatus === 'unmatched');
         setRecentAlerts(unmatchedOnly.slice(0, 3));
+      } else {
+        const err = await response.json().catch(() => ({ error: 'Failed to fetch alerts' }));
+        throw new Error(err?.error || err?.message || 'Failed to fetch alerts');
       }
     } catch (error) {
       console.error('Error fetching recent alerts:', error);
       setRecentAlerts([]);
+      setAlertsError((error as any)?.message || 'Failed to load alerts');
     } finally {
       setIsLoadingAlerts(false);
     }
@@ -70,6 +100,11 @@ export default function Home() {
 
         {/* KPI Cards */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6 mb-6 sm:mb-8">
+          {summaryError && (
+            <div className="col-span-full bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-3 text-sm">
+              {summaryError}
+            </div>
+          )}
           <KPICard
             title="Active Transit Flights"
             value={isLoadingSummary ? '...' : (summary?.activeTransitFlights?.toString() || '0')}
@@ -138,6 +173,53 @@ export default function Home() {
             <span className="hidden sm:inline">Analytics & Reports</span>
             <span className="sm:hidden">Analytics</span>
           </Link>
+        </div>
+
+        {/* Recent Alerts */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 sm:p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg sm:text-xl font-semibold text-gray-900">Recent Alerts</h3>
+            <button className="text-[#00A651] hover:text-[#008a43] text-xs sm:text-sm font-semibold transition-colors">View All</button>
+          </div>
+
+          {alertsError && (
+            <div className="mb-4 bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-3 text-sm">
+              {alertsError}
+            </div>
+          )}
+
+          {isLoadingAlerts ? (
+            <div className="flex items-center justify-center py-12">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#00A651]"></div>
+            </div>
+          ) : recentAlerts.length > 0 ? (
+            <div className="space-y-4">
+              {recentAlerts.map((alert, index) => {
+                const alertType = alert.alertType || 'warning';
+                const isUnmatched = alert.matched === false || alert.alertStatus === 'unmatched';
+                const showResolve = isUnmatched;
+
+                return (
+                  <AlertCard
+                    key={alert.id || index}
+                    type={alertType === 'success' ? 'success' : alertType === 'error' ? 'error' : 'warning'}
+                    code={`ET-${alert.flightNumber || 'N/A'}`}
+                    time={alert.timeAgo || 'N/A'}
+                    message={
+                      alert.passengerName
+                        ? `${alert.passengerName}${alert.route ? ` • ${alert.route}` : ''}${alert.matchReason ? ` • ${alert.matchReason}` : ''}`
+                        : (alert.matchReason || 'Unmatched scan detected')
+                    }
+                    showResolve={showResolve}
+                  />
+                );
+              })}
+            </div>
+          ) : (
+            <div className="text-center py-12 text-gray-500">
+              <p>No recent alerts</p>
+            </div>
+          )}
         </div>
 
       </main>
