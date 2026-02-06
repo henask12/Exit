@@ -79,24 +79,29 @@ export function FlightSelection({
           </select>
         </div>
 
-        {/* Flight Number Dropdown */}
+        {/* Flight Number Input with suggestions */}
         <div>
           <label className="block text-sm font-semibold text-gray-700 mb-2">Flight Number</label>
-          <select
+          {/* Free-text input so user can type any flight number, with suggestions from known flights */}
+          <input
+            list="flight-number-options"
+            type="text"
             value={flightNumber}
             onChange={(e) => onFlightNumberChange(e.target.value)}
             disabled={isLoadingFlights}
+            placeholder={isLoadingFlights ? 'Loading flights...' : 'Type or select a flight number'}
             className="w-full px-4 py-3 border border-gray-300 rounded-lg text-base focus:outline-none focus:ring-2 focus:ring-[#00A651] focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed"
-          >
-            <option value="">
-              {isLoadingFlights ? 'Loading flights...' : 'Select Flight'}
-            </option>
+          />
+          <datalist id="flight-number-options">
             {flightNumbers.map((flight, index) => (
               <option key={index} value={String(flight)}>
                 {flight}
               </option>
             ))}
-          </select>
+          </datalist>
+          <p className="mt-1 text-xs text-gray-500">
+            You can select from the list or type any valid flight number.
+          </p>
         </div>
 
         {/* Proceed Button */}

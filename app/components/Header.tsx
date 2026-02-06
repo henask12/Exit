@@ -5,7 +5,13 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
 
 interface HeaderProps {
-  activeTab?: 'operations' | 'mobile-scanner' | 'integration-health' | 'settings';
+  activeTab?:
+    | 'operations'
+    | 'mobile-scanner'
+    | 'integration-health'
+    | 'settings'
+    | 'account-management'
+    | 'master-data';
 }
 
 export default function Header({ activeTab = 'operations' }: HeaderProps) {

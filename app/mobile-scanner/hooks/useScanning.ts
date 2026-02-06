@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { apiCall, API_BASE_URL } from '@/lib/auth';
+import { apiCall } from '@/lib/auth';
 import { useNotifications } from '@/hooks/useNotifications';
 
 export function useScanning() {
