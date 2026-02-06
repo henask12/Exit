@@ -8,14 +8,51 @@ import { loginSchema } from '@/lib/validations';
 import { useNotifications } from '@/hooks/useNotifications';
 import { NotificationContainer } from '../components/ui/NotificationToast';
 
+const REMEMBER_ME_KEY = 'exitcheck_remember_me';
+const REMEMBERED_EMPLOYEE_ID_KEY = 'exitcheck_employee_id';
+const REMEMBERED_PASSWORD_KEY = 'exitcheck_password';
+
 export default function LoginPage() {
   const router = useRouter();
   const { addNotification, notifications, removeNotification } = useNotifications();
   const { validate, getFieldError, setFieldTouched } = useFormValidation(loginSchema);
-  const [formData, setFormData] = useState({ employeeId: '00028804', password: '' });
+  
+  // Load remembered credentials on mount
+  const loadRememberedCredentials = () => {
+    if (typeof window === 'undefined') {
+      return { employeeId: '', password: '', rememberMe: false };
+    }
+    
+    const remembered = localStorage.getItem(REMEMBER_ME_KEY) === 'true';
+    const employeeId = remembered ? localStorage.getItem(REMEMBERED_EMPLOYEE_ID_KEY) || '' : '';
+    const password = remembered ? localStorage.getItem(REMEMBERED_PASSWORD_KEY) || '' : '';
+    
+    return { employeeId, password, rememberMe: remembered };
+  };
+
+  const initialCredentials = loadRememberedCredentials();
+  const [formData, setFormData] = useState({ 
+    employeeId: initialCredentials.employeeId || '00028804', 
+    password: initialCredentials.password 
+  });
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const [rememberMe, setRememberMe] = useState(false);
+  const [rememberMe, setRememberMe] = useState(initialCredentials.rememberMe);
+
+  // Save or clear remembered credentials
+  const saveRememberedCredentials = (employeeId: string, password: string, shouldRemember: boolean) => {
+    if (typeof window === 'undefined') return;
+    
+    if (shouldRemember) {
+      localStorage.setItem(REMEMBER_ME_KEY, 'true');
+      localStorage.setItem(REMEMBERED_EMPLOYEE_ID_KEY, employeeId);
+      localStorage.setItem(REMEMBERED_PASSWORD_KEY, password);
+    } else {
+      localStorage.removeItem(REMEMBER_ME_KEY);
+      localStorage.removeItem(REMEMBERED_EMPLOYEE_ID_KEY);
+      localStorage.removeItem(REMEMBERED_PASSWORD_KEY);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -28,6 +65,10 @@ export default function LoginPage() {
     setIsLoading(true);
     try {
       await authAPI.login(formData.employeeId, formData.password);
+      
+      // Save credentials if "Remember me" is checked
+      saveRememberedCredentials(formData.employeeId, formData.password, rememberMe);
+      
       addNotification('success', 'Login Successful', 'Redirecting...');
       setTimeout(() => router.push('/'), 500);
     } catch (error: any) {
@@ -138,7 +179,14 @@ export default function LoginPage() {
               <input
                 type="checkbox"
                 checked={rememberMe}
-                onChange={(e) => setRememberMe(e.target.checked)}
+                onChange={(e) => {
+                  const checked = e.target.checked;
+                  setRememberMe(checked);
+                  // If unchecking, clear saved credentials immediately
+                  if (!checked) {
+                    saveRememberedCredentials('', '', false);
+                  }
+                }}
                 className="w-4 h-4 text-[#00A651] border-gray-300 rounded focus:ring-[#00A651]"
               />
               <span className="ml-2 text-sm text-gray-500">Remember me</span>

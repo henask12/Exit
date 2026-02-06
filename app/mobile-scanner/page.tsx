@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { useRouter } from 'next/navigation';
 import Header from '../components/Header';
 import { BrowserMultiFormatReader } from '@zxing/browser';
 import { NotFoundException, DecodeHintType, BarcodeFormat } from '@zxing/library';
@@ -10,6 +11,7 @@ import { apiCall, auth } from '@/lib/auth';
 type ViewMode = 'flight-selection' | 'camera';
 
 export default function MobileScanner() {
+  const router = useRouter();
   const [currentView, setCurrentView] = useState<ViewMode>('flight-selection');
   const [isScanning, setIsScanning] = useState(false);
   const [scanResult, setScanResult] = useState<any>(null);
@@ -39,11 +41,17 @@ export default function MobileScanner() {
   const [isLoadingActivity, setIsLoadingActivity] = useState(false);
   const [userStationCode, setUserStationCode] = useState<string>('');
   const flightNumberDropdownRef = useRef<HTMLDivElement>(null);
+  
+  // Sync status and polling state
+  const [syncStatus, setSyncStatus] = useState<'idle' | 'pending' | 'syncing' | 'complete'>('idle');
+  const [lastUpdatedUtc, setLastUpdatedUtc] = useState<string | null>(null);
+  const [isPollingSync, setIsPollingSync] = useState(false);
 
   const filteredFlightNumbers = useMemo(() => {
     const q = flightNumberQuery.trim();
-    if (!q) return flightNumbers;
-    return flightNumbers.filter((f) => String(f).includes(q));
+    if (!q) return [];
+    // Filter flights that match the query (case-insensitive, partial match)
+    return flightNumbers.filter((f) => String(f).toLowerCase().includes(q.toLowerCase()));
   }, [flightNumbers, flightNumberQuery]);
 
   // Close flight number dropdown on outside click
@@ -104,6 +112,76 @@ export default function MobileScanner() {
     }
     return 'N/A';
   }, [flightDetails?.route]);
+
+  /**
+   * Refetch flight details when data changes
+   * 
+   * Flow: Phase 3b - When lastUpdatedUtc changes, refetch full flight data
+   * This is called automatically when timestamp polling detects a change
+   */
+  const refetchFlightDetails = useCallback(async () => {
+    if (!flightNumber || !flightDate || !station) return;
+    
+    try {
+      const dateStr = flightDate.split('T')[0];
+      const response = await apiCall(`/Flight/details?flightNumber=${flightNumber}&date=${dateStr}&station=${station}`);
+      
+      if (response.ok) {
+        const data = await response.json();
+        setFlightDetails(data);
+        // Don't reset scanned passengers on auto-refresh to preserve user's scan state
+      }
+    } catch (error) {
+      console.error('Error refetching flight details:', error);
+    }
+  }, [flightNumber, flightDate, station]);
+
+  /**
+   * Check if flight sync is pending
+   * 
+   * Flow: Phase 3a - Polls GET /api/FlightSync/pending to check if sync is in progress
+   * Returns true if there are pending sync requests for this flight/date
+   */
+  const checkPendingSync = useCallback(async (): Promise<boolean> => {
+    if (!flightNumber || !flightDate) return false;
+    
+    try {
+      const dateStr = flightDate.split('T')[0];
+      const response = await apiCall(`/FlightSync/pending?flightNumber=${flightNumber}&date=${dateStr}`);
+      
+      if (response.ok) {
+        const pending = await response.json();
+        // Returns true if array has any pending requests
+        return Array.isArray(pending) && pending.length > 0;
+      }
+    } catch (error) {
+      console.error('Error checking pending sync:', error);
+    }
+    return false;
+  }, [flightNumber, flightDate]);
+
+  /**
+   * Check last updated timestamp for flight data
+   * 
+   * Flow: Phase 3b - Polls GET /api/flight/last-updated to detect data changes
+   * Returns the lastUpdatedUtc timestamp if available
+   */
+  const checkLastUpdated = useCallback(async (): Promise<string | null> => {
+    if (!flightNumber || !flightDate) return null;
+    
+    try {
+      const dateStr = flightDate.split('T')[0];
+      const response = await apiCall(`/flight/last-updated?flightNumber=${flightNumber}&date=${dateStr}`);
+      
+      if (response.ok) {
+        const data = await response.json();
+        return data.lastUpdatedUtc || null;
+      }
+    } catch (error) {
+      console.error('Error checking last updated:', error);
+    }
+    return null;
+  }, [flightNumber, flightDate]);
 
   // Fetch flight progress
   const fetchFlightProgress = useCallback(async () => {
@@ -1039,12 +1117,16 @@ export default function MobileScanner() {
 
   // Handle flight selection and switch to camera view
   const handleFlightSelect = async () => {
-    if (station && flightNumber && flightDate) {
+    // Use the query value (what user typed) as the flight number
+    const flightNum = flightNumberQuery.trim();
+    if (station && flightNum && flightDate) {
+      // Update flightNumber state to match what user typed
+      setFlightNumber(flightNum);
       try {
         setIsLoadingFlights(true);
         // Call API to get flight details with scan status
         const dateStr = flightDate.split('T')[0]; // Get YYYY-MM-DD format
-        const response = await apiCall(`/Flight/details?flightNumber=${flightNumber}&date=${dateStr}&station=${station}`);
+        const response = await apiCall(`/Flight/details?flightNumber=${flightNum}&date=${dateStr}&station=${station}`);
 
         if (!response.ok) {
           throw new Error(`Failed to fetch flight details: ${response.status}`);
@@ -1056,12 +1138,15 @@ export default function MobileScanner() {
         setFlightDetails(data);
         // Reset scanned passengers when new flight is loaded
         setScannedPassengers(new Set());
+        // Reset sync status for new flight
+        setSyncStatus('idle');
+        setLastUpdatedUtc(null);
 
         console.log('Flight details:', data);
 
         // Fetch flight progress
         try {
-          const progressResponse = await apiCall(`/Flight/progress?flightNumber=${flightNumber}&date=${dateStr}&station=${station}`);
+          const progressResponse = await apiCall(`/Flight/progress?flightNumber=${flightNum}&date=${dateStr}&station=${station}`);
           if (progressResponse.ok) {
             const progress = await progressResponse.json();
             setFlightProgress(progress);
@@ -1088,17 +1173,149 @@ export default function MobileScanner() {
     }
   }, [station, flightDate]);
 
-  // Effect to fetch flight progress periodically when in camera view
+  /**
+   * Three-phase polling strategy for sync status and data updates
+   * 
+   * System Flow:
+   * Phase 1 (Azure API): User requests flight → Azure tries local proxy → If fails, enqueues sync request
+   * Phase 2 (Local API): Hangfire job polls pending requests → Processes sync → Saves to DB → Marks complete
+   * Phase 3 (UI): This polling strategy detects when sync completes and updates UI
+   * 
+   * UI Polling Phases:
+   * - Phase 3a: Pending check (5s) - Checks if sync is still in progress
+   * - Phase 3b: Timestamp polling (12s) - Detects when data changes
+   * - Phase 3c: Progress updates (30s) - Updates scan progress independently
+   */
   useEffect(() => {
-    if (flightNumber && flightDate && station && currentView === 'camera') {
-      fetchFlightProgress();
-      const interval = setInterval(() => {
-        fetchFlightProgress();
-      }, 30000); // Refresh every 30 seconds
-      
-      return () => clearInterval(interval);
+    if (!flightNumber || !flightDate || !station || currentView !== 'camera') {
+      setSyncStatus('idle');
+      setIsPollingSync(false);
+      return;
     }
-  }, [flightNumber, flightDate, station, currentView, fetchFlightProgress]);
+
+    let pendingInterval: NodeJS.Timeout | null = null;
+    let timestampInterval: NodeJS.Timeout | null = null;
+    let progressInterval: NodeJS.Timeout | null = null;
+    let retryCount = 0;
+    let timestampPollingStarted = false;
+    const MAX_PENDING_RETRIES = 40; // 40 * 5s = 200s max (3.3 minutes)
+    const TIMESTAMP_POLL_INTERVAL = 12000; // 12 seconds
+    const PROGRESS_POLL_INTERVAL = 30000; // 30 seconds
+
+    /**
+     * Phase 3a: Check pending sync (5s interval)
+     * 
+     * Polls GET /api/FlightSync/pending?flightNumber=X&date=Y
+     * - If array.length > 0: Show "Syncing..." badge, continue polling
+     * - If array.length === 0: Sync complete, transition to timestamp polling
+     */
+    const checkPending = async () => {
+      try {
+        const isPending = await checkPendingSync();
+        
+        if (isPending) {
+          setSyncStatus('syncing');
+          retryCount++;
+          
+          // Safety: stop after max retries and assume complete
+          if (retryCount >= MAX_PENDING_RETRIES) {
+            setSyncStatus('complete');
+            if (pendingInterval) {
+              clearInterval(pendingInterval);
+              pendingInterval = null;
+            }
+            if (!timestampPollingStarted) {
+              startTimestampPolling();
+            }
+          }
+        } else {
+          // No longer pending, move to timestamp polling
+          setSyncStatus('complete');
+          retryCount = 0;
+          if (pendingInterval) {
+            clearInterval(pendingInterval);
+            pendingInterval = null;
+          }
+          if (!timestampPollingStarted) {
+            startTimestampPolling();
+          }
+        }
+      } catch (error) {
+        console.error('Error in pending check:', error);
+      }
+    };
+
+    /**
+     * Phase 3b: Timestamp polling (12s interval)
+     * 
+     * Polls GET /api/flight/last-updated?flightNumber=X&date=Y
+     * - Stores lastUpdatedUtc value
+     * - If lastUpdatedUtc changes: Refetches GET /api/flight/passengers (via refetchFlightDetails)
+     * - Continues until user navigates away
+     */
+    const startTimestampPolling = async () => {
+      if (timestampPollingStarted || timestampInterval) return; // Prevent duplicate starts
+      timestampPollingStarted = true;
+      
+      // Get initial timestamp
+      const initialTimestamp = await checkLastUpdated();
+      if (initialTimestamp) {
+        setLastUpdatedUtc(initialTimestamp);
+      }
+
+      timestampInterval = setInterval(async () => {
+        try {
+          const newTimestamp = await checkLastUpdated();
+          
+          // Use functional update to get current state
+          setLastUpdatedUtc((currentTimestamp) => {
+            if (newTimestamp && newTimestamp !== currentTimestamp) {
+              // Data changed, refetch flight details
+              console.log('Flight data updated, refetching...');
+              refetchFlightDetails();
+              return newTimestamp;
+            }
+            return currentTimestamp;
+          });
+        } catch (error) {
+          console.error('Error in timestamp polling:', error);
+        }
+      }, TIMESTAMP_POLL_INTERVAL);
+    };
+
+    /**
+     * Phase 3c: Progress polling (30s interval)
+     * 
+     * Polls GET /api/flight/progress?flightNumber=X&date=Y&station=Z
+     * - Updates scan progress indicators independently
+     * - Runs continuously regardless of sync status
+     */
+    const startProgressPolling = () => {
+      fetchFlightProgress(); // Initial fetch
+      progressInterval = setInterval(() => {
+        fetchFlightProgress();
+      }, PROGRESS_POLL_INTERVAL);
+    };
+
+    // Initialize polling
+    setIsPollingSync(true);
+    setSyncStatus('pending');
+    
+    // Start Phase 1: Check pending sync
+    checkPending();
+    pendingInterval = setInterval(checkPending, 5000);
+    
+    // Start Phase 3: Progress polling (runs independently)
+    startProgressPolling();
+
+    // Cleanup
+    return () => {
+      if (pendingInterval) clearInterval(pendingInterval);
+      if (timestampInterval) clearInterval(timestampInterval);
+      if (progressInterval) clearInterval(progressInterval);
+      setIsPollingSync(false);
+    };
+  }, [flightNumber, flightDate, station, currentView, checkPendingSync, checkLastUpdated, refetchFlightDetails, fetchFlightProgress]);
 
   // Effect to fetch activity feed when filters or page change
   useEffect(() => {
@@ -1175,6 +1392,9 @@ export default function MobileScanner() {
     if (!file) {
       return;
     }
+
+    // Play capture sound
+    playCaptureSound();
 
     // Reset input
     if (fileInputRef.current) {
@@ -1297,6 +1517,49 @@ export default function MobileScanner() {
     return { matched: false };
   };
 
+  // Play capture sound
+  const playCaptureSound = useCallback(() => {
+    try {
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioContextClass) {
+        return;
+      }
+
+      const audioContext = new AudioContextClass();
+      
+      // Resume audio context if suspended (required by some browsers)
+      if (audioContext.state === 'suspended') {
+        audioContext.resume();
+      }
+
+      const oscillator = audioContext.createOscillator();
+      const gainNode = audioContext.createGain();
+
+      oscillator.connect(gainNode);
+      gainNode.connect(audioContext.destination);
+
+      // Set a pleasant beep sound (800Hz for 100ms)
+      oscillator.frequency.value = 800;
+      oscillator.type = 'sine';
+
+      // Fade out to avoid clicking sound
+      const now = audioContext.currentTime;
+      gainNode.gain.setValueAtTime(0.3, now);
+      gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.1);
+
+      oscillator.start(now);
+      oscillator.stop(now + 0.1);
+
+      // Clean up after sound finishes
+      oscillator.onended = () => {
+        audioContext.close();
+      };
+    } catch (error) {
+      // Silently fail if audio cannot be played
+      console.log('Could not play capture sound:', error);
+    }
+  }, []);
+
   // Capture and scan from image - using API
   const captureAndScan = async () => {
     if (!videoRef.current) {
@@ -1319,6 +1582,9 @@ export default function MobileScanner() {
         return;
       }
     }
+
+    // Play capture sound
+    playCaptureSound();
 
     // Stop any active scanning
     stopScanning();
@@ -1596,7 +1862,7 @@ export default function MobileScanner() {
                   </div>
                 </div>
 
-                {/* Flight Number Dropdown */}
+                {/* Flight Number Input with Autocomplete */}
                 <div>
                   <label className="block text-sm font-semibold text-gray-700 mb-2">Flight Number</label>
                   <div className="relative" ref={flightNumberDropdownRef}>
@@ -1609,27 +1875,42 @@ export default function MobileScanner() {
                       type="text"
                       value={flightNumberQuery}
                       onChange={(e) => {
-                        setFlightNumberQuery(e.target.value);
-                        setShowFlightNumberDropdown(true);
-                        // If user clears input, clear selection too
-                        if (!e.target.value) setFlightNumber('');
+                        const value = e.target.value;
+                        setFlightNumberQuery(value);
+                        setFlightNumber(value); // Update flight number as user types
+                        // Show suggestions if there's input and we have flights loaded
+                        if (value.trim() && flightDate && flightNumbers.length > 0) {
+                          setShowFlightNumberDropdown(true);
+                        } else {
+                          setShowFlightNumberDropdown(false);
+                        }
                       }}
                       onFocus={() => {
-                        if (flightDate && !isLoadingFlights) setShowFlightNumberDropdown(true);
+                        // Show suggestions if there's a query and flights are loaded
+                        if (flightNumberQuery.trim() && flightDate && flightNumbers.length > 0) {
+                          setShowFlightNumberDropdown(true);
+                        }
                       }}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter') {
                           e.preventDefault();
-                          const first = filteredFlightNumbers[0];
-                          if (first !== undefined) {
-                            const v = String(first);
+                          // If there are suggestions, select the first one
+                          if (filteredFlightNumbers.length > 0) {
+                            const v = String(filteredFlightNumbers[0]);
                             setFlightNumber(v);
                             setFlightNumberQuery(v);
+                            setShowFlightNumberDropdown(false);
+                          } else {
+                            // Otherwise, use the typed value and close dropdown
                             setShowFlightNumberDropdown(false);
                           }
                         }
                         if (e.key === 'Escape') {
                           setShowFlightNumberDropdown(false);
+                        }
+                        if (e.key === 'ArrowDown' && filteredFlightNumbers.length > 0) {
+                          e.preventDefault();
+                          setShowFlightNumberDropdown(true);
                         }
                       }}
                       disabled={!flightDate || isLoadingFlights}
@@ -1638,7 +1919,7 @@ export default function MobileScanner() {
                           ? 'Loading flights...'
                           : !flightDate
                           ? 'Select date first'
-                          : 'Search flight number...'
+                          : 'Type flight number (e.g., 309, 318)...'
                       }
                       className="w-full pl-10 pr-10 py-3 border border-gray-300 rounded-lg text-base text-gray-700 focus:outline-none focus:ring-2 focus:ring-[#00A651] focus:border-[#00A651] bg-white disabled:bg-gray-100 disabled:cursor-not-allowed disabled:text-gray-400"
                     />
@@ -1648,34 +1929,38 @@ export default function MobileScanner() {
                       </svg>
                     </div>
 
-                    {showFlightNumberDropdown && flightDate && !isLoadingFlights && (
+                    {/* Autocomplete Suggestions */}
+                    {showFlightNumberDropdown && flightDate && !isLoadingFlights && flightNumberQuery.trim() && (
                       <div className="absolute top-full left-0 mt-2 w-full bg-white border border-gray-200 rounded-lg shadow-xl z-50 overflow-hidden">
                         <div className="max-h-60 overflow-auto">
                           {filteredFlightNumbers.length === 0 ? (
                             <div className="px-4 py-3 text-sm text-gray-500">
-                              No flights found{flightNumberQuery.trim() ? ` for "${flightNumberQuery.trim()}"` : ''}.
+                              <div>No matching flights found for "{flightNumberQuery.trim()}"</div>
+                              <div className="text-xs text-gray-400 mt-1">You can still type and submit any flight number</div>
                             </div>
                           ) : (
-                            filteredFlightNumbers.slice(0, 50).map((flight, index) => {
-                              const v = String(flight);
-                              const selected = v === flightNumber;
-                              return (
-                                <button
-                                  key={`${v}-${index}`}
-                                  type="button"
-                                  onClick={() => {
-                                    setFlightNumber(v);
-                                    setFlightNumberQuery(v);
-                                    setShowFlightNumberDropdown(false);
-                                  }}
-                                  className={`w-full text-left px-4 py-3 text-sm transition-colors ${
-                                    selected ? 'bg-green-50 text-[#00A651] font-semibold' : 'text-gray-800 hover:bg-gray-50'
-                                  }`}
-                                >
-                                  {v}
-                                </button>
-                              );
-                            })
+                            <>
+                              {filteredFlightNumbers.slice(0, 50).map((flight, index) => {
+                                const v = String(flight);
+                                const selected = v === flightNumber;
+                                return (
+                                  <button
+                                    key={`${v}-${index}`}
+                                    type="button"
+                                    onClick={() => {
+                                      setFlightNumber(v);
+                                      setFlightNumberQuery(v);
+                                      setShowFlightNumberDropdown(false);
+                                    }}
+                                    className={`w-full text-left px-4 py-3 text-sm transition-colors ${
+                                      selected ? 'bg-green-50 text-[#00A651] font-semibold' : 'text-gray-800 hover:bg-gray-50'
+                                    }`}
+                                  >
+                                    {v}
+                                  </button>
+                                );
+                              })}
+                            </>
                           )}
                         </div>
                         {filteredFlightNumbers.length > 50 && (
@@ -1687,14 +1972,17 @@ export default function MobileScanner() {
                     )}
                   </div>
                   {!flightDate && (
-                    <p className="mt-1 text-xs text-gray-500 italic">* Available flights will appear after selecting a date.</p>
+                    <p className="mt-1 text-xs text-gray-500 italic">* Select a date to enable flight number input.</p>
+                  )}
+                  {flightDate && flightNumberQuery.trim() && filteredFlightNumbers.length === 0 && (
+                    <p className="mt-1 text-xs text-blue-600 italic">* No match found. You can still submit this flight number.</p>
                   )}
                 </div>
 
                 {/* Start Scanning Button */}
                 <button
                   onClick={handleFlightSelect}
-                  disabled={!flightNumber || !flightDate || isLoadingFlights}
+                  disabled={!flightNumberQuery.trim() || !flightDate || isLoadingFlights}
                   className="w-full bg-gray-300 text-gray-500 px-6 py-4 rounded-lg font-semibold text-base transition-colors disabled:cursor-not-allowed disabled:hover:bg-gray-300 enabled:bg-[#00A651] enabled:text-white enabled:hover:bg-[#008a43] flex items-center justify-center gap-2"
                 >
                   <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
@@ -2072,9 +2360,34 @@ export default function MobileScanner() {
                 {/* Header Section */}
                 <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
                   <div className="flex items-center justify-between mb-4">
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-3 flex-wrap">
                       <span className="px-3 py-1 bg-[#00A651] text-gray-900 rounded-full text-xs font-semibold">IN PROGRESS</span>
                       <span className="text-sm text-gray-800">{new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+                      {/* Sync Status Indicator */}
+                      {syncStatus === 'syncing' && (
+                        <span className="px-3 py-1 bg-yellow-100 text-yellow-800 rounded-full text-xs font-semibold flex items-center gap-1.5 animate-pulse">
+                          <svg className="w-3 h-3 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                          </svg>
+                          Syncing flight data...
+                        </span>
+                      )}
+                      {syncStatus === 'pending' && (
+                        <span className="px-3 py-1 bg-blue-100 text-blue-800 rounded-full text-xs font-semibold flex items-center gap-1.5">
+                          <svg className="w-3 h-3 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                          </svg>
+                          Checking sync status...
+                        </span>
+                      )}
+                      {syncStatus === 'complete' && lastUpdatedUtc && (
+                        <span className="px-3 py-1 bg-green-100 text-green-800 rounded-full text-xs font-semibold flex items-center gap-1.5" title={`Last updated: ${new Date(lastUpdatedUtc).toLocaleString()}`}>
+                          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                          </svg>
+                          Data synced
+                        </span>
+                      )}
                     </div>
                     <div className="flex items-center gap-2">
                       {/* <button className="px-3 py-1.5 text-sm text-gray-300 hover:text-white hover:bg-gray-700 rounded-lg transition-colors flex items-center gap-2">
@@ -2083,7 +2396,10 @@ export default function MobileScanner() {
                         </svg>
                         Pause Feed
                       </button> */}
-                      <button className="px-4 py-1.5 bg-[#00A651] text-white rounded-lg text-sm font-semibold hover:bg-[#008a43] transition-colors flex items-center gap-2">
+                      <button 
+                        onClick={() => router.push('/')}
+                        className="px-4 py-1.5 bg-[#00A651] text-white rounded-lg text-sm font-semibold hover:bg-[#008a43] transition-colors flex items-center gap-2"
+                      >
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                         </svg>
