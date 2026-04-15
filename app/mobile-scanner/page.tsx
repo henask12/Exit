@@ -39,9 +39,7 @@ export default function MobileScanner() {
   const [flightProgress, setFlightProgress] = useState<any>(null);
   const [activityData, setActivityData] = useState<any>(null);
   const [activityPage, setActivityPage] = useState(1);
-  const [isLoadingActivity, setIsLoadingActivity] = useState(false);
   const [manualMatchedScans, setManualMatchedScans] = useState<Array<any>>([]);
-  const [isLoadingManualMatchedScans, setIsLoadingManualMatchedScans] = useState(false);
   const [userStationCode, setUserStationCode] = useState<string>('');
   const flightNumberDropdownRef = useRef<HTMLDivElement>(null);
   
@@ -99,13 +97,16 @@ export default function MobileScanner() {
 
   const normalizeForSearch = useCallback((value: any) => String(value || '').trim().toLowerCase(), []);
 
-  const backendScannedCount = useMemo(() => Math.max(0, flightDetails?.totalScannedCount ?? 0), [flightDetails?.totalScannedCount]);
+  const backendScannedCount = useMemo(
+    () => Math.max(0, flightDetails?.totalScannedCount ?? flightProgress?.scannedAndMatched ?? 0),
+    [flightDetails?.totalScannedCount, flightProgress?.scannedAndMatched]
+  );
   const displayManualCount = useMemo(() => Math.max(0, flightDetails?.manualScannedCount ?? 0), [flightDetails?.manualScannedCount]);
   const displayAutoCount = useMemo(() => Math.max(0, flightDetails?.autoScannedCount ?? 0), [flightDetails?.autoScannedCount]);
   const displayScannedCount = useMemo(() => Math.max(0, backendScannedCount), [backendScannedCount]);
   const displayRemainingCount = useMemo(
-    () => Math.max(0, (flightDetails?.disembarkingPassengerCount ?? 0) - displayScannedCount),
-    [flightDetails?.disembarkingPassengerCount, displayScannedCount]
+    () => Math.max(0, flightProgress?.remaining ?? ((flightDetails?.disembarkingPassengerCount ?? 0) - displayScannedCount)),
+    [flightDetails?.disembarkingPassengerCount, flightProgress?.remaining, displayScannedCount]
   );
 
   const backendMatchedPassengerIds = useMemo(() => {
@@ -247,36 +248,12 @@ export default function MobileScanner() {
    * Flow: Phase 3a - Polls GET /api/FlightSync/pending to check if sync is in progress
    * Returns true if there are pending sync requests for this flight/date
    */
-  const checkPendingSync = useCallback(async (): Promise<boolean> => {
-    if (!flightNumber || !flightDate) return false;
-    
-    try {
-      const dateStr = flightDate.split('T')[0];
-      const response = await apiCall(`/FlightSync/pending?flightNumber=${flightNumber}&date=${dateStr}`);
-      
-      if (response.ok) {
-        const pending = await response.json();
-        // Returns true if array has any pending requests
-        return Array.isArray(pending) && pending.length > 0;
-      }
-    } catch (error) {
-      console.error('Error checking pending sync:', error);
-    }
-    return false;
-  }, [flightNumber, flightDate]);
-
-  /**
-   * Check last updated timestamp for flight data
-   * 
-   * Flow: Phase 3b - Polls GET /api/flight/last-updated to detect data changes
-   * Returns the lastUpdatedUtc timestamp if available
-   */
   const checkLastUpdated = useCallback(async (): Promise<string | null> => {
     if (!flightNumber || !flightDate) return null;
     
     try {
       const dateStr = flightDate.split('T')[0];
-      const response = await apiCall(`/flight/last-updated?flightNumber=${flightNumber}&date=${dateStr}`);
+      const response = await apiCall(`/proxy/flight/last-updated?flightNumber=${flightNumber}&date=${dateStr}`);
       
       if (response.ok) {
         const data = await response.json();
@@ -306,7 +283,6 @@ export default function MobileScanner() {
 
   // Fetch activity feed
   const fetchActivityFeed = useCallback(async (page: number = 1) => {
-    setIsLoadingActivity(true);
     try {
       const params = new URLSearchParams({
         page: page.toString(),
@@ -345,15 +321,12 @@ export default function MobileScanner() {
     } catch (error: any) {
       console.error('Error fetching activity feed:', error);
       addNotification('error', 'Failed to load activity', error.message || 'Could not fetch activity feed');
-    } finally {
-      setIsLoadingActivity(false);
     }
   }, [activityStatusFilter, flightNumber, station, flightDate, addNotification]);
 
   const fetchManualMatchedScans = useCallback(async () => {
     if (!flightNumber || !flightDate || !station) return;
 
-    setIsLoadingManualMatchedScans(true);
     try {
       const dateStr = flightDate.split('T')[0];
       const endpoint = `/Flight/scans/manual-matched?flightNumber=${flightNumber}&date=${dateStr}&station=${station}`;
@@ -380,8 +353,6 @@ export default function MobileScanner() {
     } catch (error) {
       console.error('Error fetching manual matched scans:', error);
       setManualMatchedScans([]);
-    } finally {
-      setIsLoadingManualMatchedScans(false);
     }
   }, [flightNumber, flightDate, station]);
 
@@ -402,6 +373,15 @@ export default function MobileScanner() {
       setFlightScans([]);
     }
   }, [flightDate, flightNumber, station]);
+
+  const refreshSharedScanState = useCallback(async () => {
+    await Promise.all([
+      refetchFlightDetails(),
+      fetchFlightProgress(),
+      fetchFlightScans(),
+      fetchManualMatchedScans(),
+    ]);
+  }, [fetchFlightProgress, fetchFlightScans, fetchManualMatchedScans, refetchFlightDetails]);
 
   const markPassengerOptimistic = useCallback((passenger: any) => {
     const matchKey = getMatchKey(passenger);
@@ -451,16 +431,13 @@ export default function MobileScanner() {
         return next;
       });
 
-      void fetchFlightProgress();
-      void refetchFlightDetails();
-      void fetchFlightScans();
-      void fetchManualMatchedScans();
+      void refreshSharedScanState();
       void fetchActivityFeed(activityPage);
     } catch (error: any) {
       rollbackOptimisticPassenger(matchKey);
       addNotification('error', `${source === 'manual' ? 'Manual' : 'Auto'} match failed`, error?.message || 'Unable to save match');
     }
-  }, [activityPage, addNotification, fetchActivityFeed, fetchFlightProgress, fetchFlightScans, fetchManualMatchedScans, refetchFlightDetails, rollbackOptimisticPassenger, station, userStation]);
+  }, [activityPage, addNotification, fetchActivityFeed, refreshSharedScanState, rollbackOptimisticPassenger, station, userStation]);
 
   // Manually match a passenger (when boarding pass is not found)
   const handleManualMatch = async (passenger: any) => {
@@ -1419,19 +1396,6 @@ export default function MobileScanner() {
     }
   }, [station, flightDate]);
 
-  /**
-   * Three-phase polling strategy for sync status and data updates
-   * 
-   * System Flow:
-   * Phase 1 (Azure API): User requests flight → Azure tries local proxy → If fails, enqueues sync request
-   * Phase 2 (Local API): Hangfire job polls pending requests → Processes sync → Saves to DB → Marks complete
-   * Phase 3 (UI): This polling strategy detects when sync completes and updates UI
-   * 
-   * UI Polling Phases:
-   * - Phase 3a: Pending check (5s) - Checks if sync is still in progress
-   * - Phase 3b: Timestamp polling (12s) - Detects when data changes
-   * - Phase 3c: Progress updates (30s) - Updates scan progress independently
-   */
   useEffect(() => {
     if (!flightNumber || !flightDate || !station || currentView !== 'camera') {
       setSyncStatus('idle');
@@ -1439,129 +1403,54 @@ export default function MobileScanner() {
       return;
     }
 
-    let pendingInterval: NodeJS.Timeout | null = null;
     let timestampInterval: NodeJS.Timeout | null = null;
     let progressInterval: NodeJS.Timeout | null = null;
-    let retryCount = 0;
-    let timestampPollingStarted = false;
-    const MAX_PENDING_RETRIES = 40; // 40 * 5s = 200s max (3.3 minutes)
-    const TIMESTAMP_POLL_INTERVAL = 12000; // 12 seconds
-    const PROGRESS_POLL_INTERVAL = 30000; // 30 seconds
+    const TIMESTAMP_POLL_INTERVAL = 6000;
+    const PROGRESS_SAFETY_INTERVAL = 30000;
 
-    /**
-     * Phase 3a: Check pending sync (5s interval)
-     * 
-     * Polls GET /api/FlightSync/pending?flightNumber=X&date=Y
-     * - If array.length > 0: Show "Syncing..." badge, continue polling
-     * - If array.length === 0: Sync complete, transition to timestamp polling
-     */
-    const checkPending = async () => {
+    const pollLastUpdatedAndRefresh = async () => {
       try {
-        const isPending = await checkPendingSync();
-        
-        if (isPending) {
-          setSyncStatus('syncing');
-          retryCount++;
-          
-          // Safety: stop after max retries and assume complete
-          if (retryCount >= MAX_PENDING_RETRIES) {
-            setSyncStatus('complete');
-            if (pendingInterval) {
-              clearInterval(pendingInterval);
-              pendingInterval = null;
-            }
-            if (!timestampPollingStarted) {
-              startTimestampPolling();
-            }
-          }
-        } else {
-          // No longer pending, move to timestamp polling
+        setSyncStatus('syncing');
+        const newTimestamp = await checkLastUpdated();
+        if (!newTimestamp) {
           setSyncStatus('complete');
-          retryCount = 0;
-          if (pendingInterval) {
-            clearInterval(pendingInterval);
-            pendingInterval = null;
-          }
-          if (!timestampPollingStarted) {
-            startTimestampPolling();
-          }
+          return;
         }
+
+        setLastUpdatedUtc((currentTimestamp) => {
+          if (newTimestamp !== currentTimestamp) {
+            void refreshSharedScanState();
+            return newTimestamp;
+          }
+          return currentTimestamp;
+        });
+
+        setSyncStatus('complete');
       } catch (error) {
-        console.error('Error in pending check:', error);
+        console.error('Error polling last updated:', error);
       }
     };
 
-    /**
-     * Phase 3b: Timestamp polling (12s interval)
-     * 
-     * Polls GET /api/flight/last-updated?flightNumber=X&date=Y
-     * - Stores lastUpdatedUtc value
-     * - If lastUpdatedUtc changes: Refetches GET /api/flight/passengers (via refetchFlightDetails)
-     * - Continues until user navigates away
-     */
-    const startTimestampPolling = async () => {
-      if (timestampPollingStarted || timestampInterval) return; // Prevent duplicate starts
-      timestampPollingStarted = true;
-      
-      // Get initial timestamp
-      const initialTimestamp = await checkLastUpdated();
-      if (initialTimestamp) {
-        setLastUpdatedUtc(initialTimestamp);
-      }
-
-      timestampInterval = setInterval(async () => {
-        try {
-          const newTimestamp = await checkLastUpdated();
-          
-          // Use functional update to get current state
-          setLastUpdatedUtc((currentTimestamp) => {
-            if (newTimestamp && newTimestamp !== currentTimestamp) {
-              // Data changed, refetch flight details
-              console.log('Flight data updated, refetching...');
-              refetchFlightDetails();
-              return newTimestamp;
-            }
-            return currentTimestamp;
-          });
-        } catch (error) {
-          console.error('Error in timestamp polling:', error);
-        }
-      }, TIMESTAMP_POLL_INTERVAL);
-    };
-
-    /**
-     * Phase 3c: Progress polling (30s interval)
-     * 
-     * Polls GET /api/flight/progress?flightNumber=X&date=Y&station=Z
-     * - Updates scan progress indicators independently
-     * - Runs continuously regardless of sync status
-     */
-    const startProgressPolling = () => {
-      fetchFlightProgress(); // Initial fetch
-      progressInterval = setInterval(() => {
-        fetchFlightProgress();
-      }, PROGRESS_POLL_INTERVAL);
-    };
-
-    // Initialize polling
     setIsPollingSync(true);
     setSyncStatus('pending');
-    
-    // Start Phase 1: Check pending sync
-    checkPending();
-    pendingInterval = setInterval(checkPending, 5000);
-    
-    // Start Phase 3: Progress polling (runs independently)
-    startProgressPolling();
+    void refreshSharedScanState();
+    void pollLastUpdatedAndRefresh();
 
-    // Cleanup
+    timestampInterval = setInterval(() => {
+      void pollLastUpdatedAndRefresh();
+    }, TIMESTAMP_POLL_INTERVAL);
+
+    // Safety heartbeat so progress never appears stale.
+    progressInterval = setInterval(() => {
+      void fetchFlightProgress();
+    }, PROGRESS_SAFETY_INTERVAL);
+
     return () => {
-      if (pendingInterval) clearInterval(pendingInterval);
       if (timestampInterval) clearInterval(timestampInterval);
       if (progressInterval) clearInterval(progressInterval);
       setIsPollingSync(false);
     };
-  }, [flightNumber, flightDate, station, currentView, checkPendingSync, checkLastUpdated, refetchFlightDetails, fetchFlightProgress]);
+  }, [checkLastUpdated, currentView, fetchFlightProgress, flightDate, flightNumber, refreshSharedScanState, station]);
 
   // Effect to fetch activity feed when filters or page change
   useEffect(() => {
@@ -1575,18 +1464,6 @@ export default function MobileScanner() {
     fetchManualMatchedScans();
     fetchFlightScans();
   }, [currentView, fetchFlightScans, fetchManualMatchedScans]);
-
-  useEffect(() => {
-    if (currentView !== 'camera' || !flightNumber || !flightDate || !station) return;
-
-    const syncInterval = setInterval(() => {
-      void refetchFlightDetails();
-      void fetchFlightScans();
-      void fetchManualMatchedScans();
-    }, 10000);
-
-    return () => clearInterval(syncInterval);
-  }, [currentView, fetchFlightScans, fetchManualMatchedScans, flightDate, flightNumber, refetchFlightDetails, station]);
 
   // Reset to page 1 when status filter changes
   useEffect(() => {
@@ -2926,50 +2803,6 @@ export default function MobileScanner() {
                   </div>
                 </div>
 
-                {/* Manual Matched Feed */}
-                <div className="bg-blue-50 rounded-lg p-4 border border-blue-200">
-                  <div className="flex items-center justify-between mb-3">
-                    <div>
-                      <h3 className="text-sm font-semibold text-blue-900">Manual Matched & Scanned</h3>
-                      <p className="text-xs text-blue-700">Loaded from manual matched scan API</p>
-                    </div>
-                    <span className="px-2.5 py-1 rounded-full bg-blue-100 text-blue-700 text-xs font-semibold">
-                      {manualMatchedScans.length}
-                    </span>
-                  </div>
-
-                  {isLoadingManualMatchedScans ? (
-                    <div className="text-sm text-blue-700">Loading manual matched scans...</div>
-                  ) : manualMatchedScans.length === 0 ? (
-                    <div className="text-sm text-blue-700">No manually matched scans yet.</div>
-                  ) : (
-                    <div className="space-y-2 max-h-40 overflow-y-auto">
-                      {manualMatchedScans.slice(0, 8).map((scan: any, index: number) => {
-                        const passengerName = scan.passengerName || scan.matchedPassengerName || scan.name || 'Unknown';
-                        const pnr = scan.pnrLocator || scan.pnr || 'N/A';
-                        const seat = scan.seat || scan.matchedPassengerSeat || 'N/A';
-                        const scannedBy = scan.scannedBy || scan.userName || 'Unknown';
-                        const scannedAt = scan.scannedAt ? new Date(scan.scannedAt).toLocaleTimeString() : 'N/A';
-
-                        return (
-                          <div key={scan.scanEventId || scan.id || `${scan.passengerId}-${index}`} className="bg-white rounded border border-blue-100 p-2.5">
-                            <div className="flex items-center justify-between gap-3">
-                              <div>
-                                <p className="text-sm font-semibold text-gray-900">{passengerName}</p>
-                                <p className="text-xs text-gray-600">PNR: {pnr} • Seat: {seat}</p>
-                              </div>
-                              <div className="text-right">
-                                <p className="text-xs font-medium text-blue-700">{scannedAt}</p>
-                                <p className="text-xs text-gray-500">{scannedBy}</p>
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-
                 {/* Recent Activity Feed */}
                 <div className="bg-gray-800 rounded-lg p-4">
                   <div className="flex items-center justify-between mb-4">
@@ -3050,11 +2883,7 @@ export default function MobileScanner() {
 
                   {/* Activity Table */}
                   <div className="overflow-x-auto">
-                    {isLoadingActivity ? (
-                      <div className="flex items-center justify-center py-12">
-                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#00A651]"></div>
-                      </div>
-                    ) : disembarkingActivityRows.length > 0 ? (
+                    {disembarkingActivityRows.length > 0 ? (
                       <>
                         <table className="w-full">
                           <thead>
