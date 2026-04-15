@@ -20,7 +20,6 @@ export default function MobileScanner() {
   const [showPermissionPrompt, setShowPermissionPrompt] = useState(false);
   const [notifications, setNotifications] = useState<Array<{ id: string, type: 'success' | 'error' | 'warning' | 'info', message: string, details?: string }>>([]);
   const [apiConnectionError, setApiConnectionError] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
   const [scanStatus, setScanStatus] = useState<'loading' | 'success' | 'error' | null>(null);
   const [station, setStation] = useState<string>('GVA');
   const [flightNumber, setFlightNumber] = useState<string>('');
@@ -31,14 +30,19 @@ export default function MobileScanner() {
   const [showFlightNumberDropdown, setShowFlightNumberDropdown] = useState(false);
   const [flightDetails, setFlightDetails] = useState<any>(null);
   const [scannedPassengers, setScannedPassengers] = useState<Set<string>>(new Set());
+  const [syncingMatchKeys, setSyncingMatchKeys] = useState<Set<string>>(new Set());
+  const [localManualCountDelta, setLocalManualCountDelta] = useState(0);
+  const [localAutoCountDelta, setLocalAutoCountDelta] = useState(0);
   const [showRemainingPassengers, setShowRemainingPassengers] = useState(false);
-  const [activitySearchQuery, setActivitySearchQuery] = useState('');
+  const [universalSearchQuery, setUniversalSearchQuery] = useState('');
   const [activityScanTypeFilter, setActivityScanTypeFilter] = useState<string>('all');
   const [activityStatusFilter, setActivityStatusFilter] = useState<string>('all');
   const [flightProgress, setFlightProgress] = useState<any>(null);
   const [activityData, setActivityData] = useState<any>(null);
   const [activityPage, setActivityPage] = useState(1);
   const [isLoadingActivity, setIsLoadingActivity] = useState(false);
+  const [manualMatchedScans, setManualMatchedScans] = useState<Array<any>>([]);
+  const [isLoadingManualMatchedScans, setIsLoadingManualMatchedScans] = useState(false);
   const [userStationCode, setUserStationCode] = useState<string>('');
   const flightNumberDropdownRef = useRef<HTMLDivElement>(null);
   
@@ -94,19 +98,54 @@ export default function MobileScanner() {
     return `${passenger?.pnrLocator || ''}_${passenger?.seat || ''}`.toUpperCase();
   }, []);
 
+  const normalizeForSearch = useCallback((value: any) => String(value || '').trim().toLowerCase(), []);
+
+  const displayManualCount = useMemo(() => {
+    return Math.max(0, (flightDetails?.manualScannedCount ?? 0) + localManualCountDelta);
+  }, [flightDetails?.manualScannedCount, localManualCountDelta]);
+
+  const displayAutoCount = useMemo(() => {
+    return Math.max(0, (flightDetails?.autoScannedCount ?? 0) + localAutoCountDelta);
+  }, [flightDetails?.autoScannedCount, localAutoCountDelta]);
+
+  const filteredRemainingPassengers = useMemo(() => {
+    const passengers = flightDetails?.disembarkingPassengers || [];
+    const query = normalizeForSearch(universalSearchQuery);
+
+    return passengers.filter((passenger: any) => {
+      const matchKey = getMatchKey(passenger);
+      if (scannedPassengers.has(matchKey)) {
+        return false;
+      }
+
+      if (!query) {
+        return true;
+      }
+
+      const name = normalizeForSearch(passenger.passengerName || passenger.name);
+      const pnr = normalizeForSearch(passenger.pnrLocator);
+      const seat = normalizeForSearch(passenger.seat);
+      return name.includes(query) || pnr.includes(query) || seat.includes(query);
+    });
+  }, [flightDetails?.disembarkingPassengers, getMatchKey, normalizeForSearch, scannedPassengers, universalSearchQuery]);
+
   const disembarkingActivityRows = useMemo(() => {
     const passengers = flightDetails?.disembarkingPassengers || [];
     return passengers.filter((passenger: any) => {
-      if (activitySearchQuery) {
-        const query = activitySearchQuery.toLowerCase();
-        const name = (passenger.passengerName || passenger.name || '').toLowerCase();
-        const pnr = (passenger.pnrLocator || '').toLowerCase();
-        if (!name.includes(query) && !pnr.includes(query)) return false;
+      const query = normalizeForSearch(universalSearchQuery);
+      if (query) {
+        const name = normalizeForSearch(passenger.passengerName || passenger.name);
+        const pnr = normalizeForSearch(passenger.pnrLocator);
+        const seat = normalizeForSearch(passenger.seat);
+        if (!name.includes(query) && !pnr.includes(query) && !seat.includes(query)) return false;
       }
       if (activityScanTypeFilter !== 'all') {
         const isScanned = scannedPassengers.has(getMatchKey(passenger));
-        if (activityScanTypeFilter === 'manual' && !isScanned) return false;
-        if (activityScanTypeFilter === 'boarding-pass') return false;
+        const isManualMatched = manualMatchedScans.some(
+          (scan: any) => String(scan?.passengerId || scan?.matchedPassengerId || '') === String(passenger?.id || '')
+        );
+        if (activityScanTypeFilter === 'manual' && (!isScanned || !isManualMatched)) return false;
+        if (activityScanTypeFilter === 'boarding-pass' && (!isScanned || isManualMatched)) return false;
       }
       if (activityStatusFilter !== 'all') {
         const isScanned = scannedPassengers.has(getMatchKey(passenger));
@@ -117,11 +156,13 @@ export default function MobileScanner() {
     });
   }, [
     flightDetails?.disembarkingPassengers,
-    activitySearchQuery,
+    universalSearchQuery,
     activityScanTypeFilter,
     activityStatusFilter,
     scannedPassengers,
+    manualMatchedScans,
     getMatchKey,
+    normalizeForSearch,
   ]);
 
   const activityRowsPerPage = 10;
@@ -286,14 +327,80 @@ export default function MobileScanner() {
     }
   }, [activityStatusFilter, flightNumber, station, flightDate, addNotification]);
 
-  // Manually match a passenger (when boarding pass is not found)
-  const handleManualMatch = async (passenger: any) => {
-    if (!passenger || !passenger.id) return;
+  const fetchManualMatchedScans = useCallback(async () => {
+    if (!flightNumber || !flightDate || !station) return;
 
+    setIsLoadingManualMatchedScans(true);
     try {
-      setIsLoading(true);
-      
-      // Call API to mark passenger as scanned
+      const dateStr = flightDate.split('T')[0];
+      const endpoint = `/Flight/scans/manual-matched?flightNumber=${flightNumber}&date=${dateStr}&station=${station}`;
+      const response = await apiCall(endpoint);
+
+      if (response.ok) {
+        const data = await response.json();
+        setManualMatchedScans(Array.isArray(data) ? data : []);
+        return;
+      }
+
+      // Fallback if dedicated endpoint is unavailable.
+      const fallbackResponse = await apiCall(`/Flight/scans?flightNumber=${flightNumber}&date=${dateStr}&station=${station}`);
+      if (!fallbackResponse.ok) {
+        throw new Error('Could not load manual matched scans');
+      }
+
+      const allScans = await fallbackResponse.json();
+      const filteredScans = (Array.isArray(allScans) ? allScans : []).filter((scan: any) => {
+        const scanType = String(scan?.scanType || '').toLowerCase();
+        return scanType === 'manual' && scan?.matched === true;
+      });
+      setManualMatchedScans(filteredScans);
+    } catch (error) {
+      console.error('Error fetching manual matched scans:', error);
+      setManualMatchedScans([]);
+    } finally {
+      setIsLoadingManualMatchedScans(false);
+    }
+  }, [flightNumber, flightDate, station]);
+
+  const markPassengerOptimistic = useCallback((passenger: any, source: 'manual' | 'auto') => {
+    const matchKey = getMatchKey(passenger);
+    if (!matchKey || scannedPassengers.has(matchKey) || syncingMatchKeys.has(matchKey)) {
+      return { accepted: false, matchKey };
+    }
+
+    setScannedPassengers((prev) => new Set([...prev, matchKey]));
+    setSyncingMatchKeys((prev) => new Set([...prev, matchKey]));
+
+    if (source === 'manual') {
+      setLocalManualCountDelta((prev) => prev + 1);
+    } else {
+      setLocalAutoCountDelta((prev) => prev + 1);
+    }
+
+    return { accepted: true, matchKey };
+  }, [getMatchKey, scannedPassengers, syncingMatchKeys]);
+
+  const rollbackOptimisticPassenger = useCallback((matchKey: string, source: 'manual' | 'auto') => {
+    setScannedPassengers((prev) => {
+      const next = new Set(prev);
+      next.delete(matchKey);
+      return next;
+    });
+    setSyncingMatchKeys((prev) => {
+      const next = new Set(prev);
+      next.delete(matchKey);
+      return next;
+    });
+
+    if (source === 'manual') {
+      setLocalManualCountDelta((prev) => Math.max(0, prev - 1));
+    } else {
+      setLocalAutoCountDelta((prev) => Math.max(0, prev - 1));
+    }
+  }, []);
+
+  const persistMatchInBackground = useCallback(async (passenger: any, matchKey: string, source: 'manual' | 'auto') => {
+    try {
       const response = await apiCall('/Flight/scan-complete', {
         method: 'POST',
         headers: {
@@ -309,68 +416,65 @@ export default function MobileScanner() {
         throw new Error('Failed to mark passenger as scanned');
       }
 
-      const matchKey = `${passenger.pnrLocator || ''}_${passenger.seat || ''}`.toUpperCase();
-      
-      // Add to scanned passengers
-      setScannedPassengers(prev => new Set([...prev, matchKey]));
+      setSyncingMatchKeys((prev) => {
+        const next = new Set(prev);
+        next.delete(matchKey);
+        return next;
+      });
 
-      // Create a scan record for manual match
-      const scanData = {
-        id: Date.now().toString(),
-        success: true,
-        source: 'manual',
-        boardingPass: {
-          passengerName: passenger.passengerName || passenger.name,
-          seat: passenger.seat,
-          pnr: passenger.pnrLocator
-        },
-        scanTime: new Date().toLocaleTimeString(),
-        scanDate: new Date().toLocaleDateString(),
-        timestamp: new Date().toISOString(),
-        scannedAt: new Date().toISOString(),
-        matched: true,
-        matchedPassenger: passenger,
-        passengerName: passenger.passengerName || passenger.name,
-        pnrLocator: passenger.pnrLocator,
-        scanType: 'manual'
-      };
-
-      // Add to recent scans
-      setRecentScans(prev => [scanData, ...prev]);
-
-      // Refresh flight progress and flight details to get updated scan status
-      await fetchFlightProgress();
-      
-      // Refresh flight details to get updated scan status
-      if (flightNumber && flightDate && station) {
-        try {
-          const dateStr = flightDate.split('T')[0];
-          const detailsResponse = await apiCall(`/Flight/details?flightNumber=${flightNumber}&date=${dateStr}&station=${station}`);
-          if (detailsResponse.ok) {
-            const updatedDetails = await detailsResponse.json();
-            setFlightDetails(updatedDetails);
-          }
-        } catch (error) {
-          console.error('Error refreshing flight details:', error);
-        }
-      }
-
-      addNotification('success', 'Passenger manually matched', `${passenger.passengerName || passenger.name} has been marked as scanned`);
+      void fetchFlightProgress();
+      void refetchFlightDetails();
+      void fetchManualMatchedScans();
+      void fetchActivityFeed(activityPage);
     } catch (error: any) {
-      addNotification('error', 'Manual Match Failed', error.message || 'Failed to mark passenger as scanned');
-    } finally {
-      setIsLoading(false);
+      rollbackOptimisticPassenger(matchKey, source);
+      addNotification('error', `${source === 'manual' ? 'Manual' : 'Auto'} match failed`, error?.message || 'Unable to save match');
     }
+  }, [activityPage, addNotification, fetchActivityFeed, fetchFlightProgress, fetchManualMatchedScans, refetchFlightDetails, rollbackOptimisticPassenger, station, userStation]);
+
+  // Manually match a passenger (when boarding pass is not found)
+  const handleManualMatch = async (passenger: any) => {
+    if (!passenger || !passenger.id) return;
+
+    const { accepted, matchKey } = markPassengerOptimistic(passenger, 'manual');
+    if (!accepted || !matchKey) {
+      return;
+    }
+
+    const now = new Date();
+    const scanData = {
+      id: Date.now().toString(),
+      success: true,
+      source: 'manual',
+      boardingPass: {
+        passengerName: passenger.passengerName || passenger.name,
+        seat: passenger.seat,
+        pnr: passenger.pnrLocator
+      },
+      scanTime: now.toLocaleTimeString(),
+      scanDate: now.toLocaleDateString(),
+      timestamp: now.toISOString(),
+      scannedAt: now.toISOString(),
+      matched: true,
+      matchedPassenger: passenger,
+      passengerName: passenger.passengerName || passenger.name,
+      pnrLocator: passenger.pnrLocator,
+      scanType: 'Manual',
+    };
+
+    setRecentScans(prev => [scanData, ...prev]);
+    addNotification('success', 'Passenger manually matched', `${passenger.passengerName || passenger.name} marked instantly`);
+
+    void persistMatchInBackground(passenger, matchKey, 'manual');
   };
 
   const handleDisembarkingRowClick = async (passenger: any) => {
-    const isAlreadyScanned = scannedPassengers.has(getMatchKey(passenger));
-    if (isAlreadyScanned || isLoading) {
+    const matchKey = getMatchKey(passenger);
+    if (scannedPassengers.has(matchKey) || syncingMatchKeys.has(matchKey)) {
       return;
     }
 
     await handleManualMatch(passenger);
-    await fetchActivityFeed(activityPage);
   };
 
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -382,6 +486,18 @@ export default function MobileScanner() {
   const apiScanIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const isProcessingScanRef = useRef<boolean>(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const stableDecodedTextRef = useRef<string>('');
+  const stableDecodedCountRef = useRef<number>(0);
+
+  useEffect(() => {
+    return () => {
+      if (audioContextRef.current) {
+        void audioContextRef.current.close();
+        audioContextRef.current = null;
+      }
+    };
+  }, []);
 
   // Initialize ZXing BarcodeReader with support for 2D barcodes and PDF417
   // Note: PDF417 requires BigInt support in the browser (available in modern browsers)
@@ -595,6 +711,37 @@ export default function MobileScanner() {
     await startCamera();
   };
 
+  const enhanceScanCanvas = useCallback((canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D) => {
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const pixels = imageData.data;
+    const contrast = 1.2;
+    const midpoint = 128;
+
+    for (let i = 0; i < pixels.length; i += 4) {
+      const gray = 0.299 * pixels[i] + 0.587 * pixels[i + 1] + 0.114 * pixels[i + 2];
+      const adjusted = Math.max(0, Math.min(255, (gray - midpoint) * contrast + midpoint));
+      pixels[i] = adjusted;
+      pixels[i + 1] = adjusted;
+      pixels[i + 2] = adjusted;
+    }
+
+    ctx.putImageData(imageData, 0, 0);
+  }, []);
+
+  const isStableDecodedValue = useCallback((decodedText: string) => {
+    const normalizedDecoded = normalizeForSearch(decodedText);
+    if (!normalizedDecoded) return false;
+
+    if (stableDecodedTextRef.current === normalizedDecoded) {
+      stableDecodedCountRef.current += 1;
+    } else {
+      stableDecodedTextRef.current = normalizedDecoded;
+      stableDecodedCountRef.current = 1;
+    }
+
+    return stableDecodedCountRef.current >= 2;
+  }, [normalizeForSearch]);
+
   // Start scanning boarding pass barcodes - using API
   const startBoardingPassScanning = () => {
     if (!videoRef.current) {
@@ -608,6 +755,8 @@ export default function MobileScanner() {
     }
 
     scanningActiveRef.current = true;
+    stableDecodedTextRef.current = '';
+    stableDecodedCountRef.current = 0;
     addNotification('info', 'Scanning started', 'Looking for boarding pass barcodes...');
 
     // Periodically capture frames and send to API
@@ -637,6 +786,7 @@ export default function MobileScanner() {
 
         // Draw current video frame to canvas
         ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
+        enhanceScanCanvas(canvas, ctx);
 
         // Convert canvas to blob
         canvas.toBlob(async (blob) => {
@@ -647,14 +797,15 @@ export default function MobileScanner() {
           }
 
           try {
-            setIsLoading(true);
-            setScanStatus('loading');
-
             // Send to API
             const apiResult = await scanBoardingPassAPI(blob);
 
             if (apiResult.success && apiResult.decodedText && scanningActiveRef.current) {
+              if (!isStableDecodedValue(apiResult.decodedText)) {
+                return;
+              }
               console.log('API scan result:', apiResult);
+              playCaptureSound();
               setScanStatus('success');
               const scanType = apiResult.scanType || 'Barcode';
               const decodedText = apiResult.decodedText;
@@ -668,6 +819,11 @@ export default function MobileScanner() {
 
               // Parse the decoded text
               const boardingPassData = parseBoardingPass(decodedText);
+              const matchResult = matchPassenger(boardingPassData, apiResult);
+
+              if (matchResult.matched && matchResult.passenger?.id) {
+                persistAutoMatchedPassenger(matchResult.passenger);
+              }
 
               // Create scan result
               const scanData = {
@@ -680,7 +836,9 @@ export default function MobileScanner() {
                 barcodeText: decodedText,
                 barcodeFormat: apiResult.barcodeFormat,
                 ocrConfidence: apiResult.ocrConfidence,
-                timestamp: new Date().toISOString()
+                timestamp: new Date().toISOString(),
+                matched: matchResult.matched,
+                matchedPassenger: matchResult.passenger,
               };
 
               // Add to recent scans (save all scans, no limit)
@@ -705,6 +863,8 @@ export default function MobileScanner() {
               setTimeout(() => {
                 setScanStatus(null);
               }, 2000);
+              stableDecodedTextRef.current = '';
+              stableDecodedCountRef.current = 0;
             }
           } catch (apiError: any) {
             setScanStatus('error');
@@ -727,16 +887,14 @@ export default function MobileScanner() {
             setTimeout(() => {
               setScanStatus(null);
             }, 2000);
-          } finally {
-            setIsLoading(false);
           }
-        }, 'image/jpeg', 0.9);
+        }, 'image/jpeg', 0.95);
 
       } catch (error) {
         isProcessingScanRef.current = false;
         console.error('Error capturing frame:', error);
       }
-    }, 1000); // Scan every 2 seconds
+    }, 1000); // Scan every second
 
     apiScanIntervalRef.current = scanInterval;
   };
@@ -744,6 +902,8 @@ export default function MobileScanner() {
   // Stop scanning
   const stopScanning = () => {
     scanningActiveRef.current = false;
+    stableDecodedTextRef.current = '';
+    stableDecodedCountRef.current = 0;
 
     // Clear API scan interval
     if (apiScanIntervalRef.current) {
@@ -1190,6 +1350,11 @@ export default function MobileScanner() {
         setFlightDetails(data);
         // Reset scanned passengers when new flight is loaded
         setScannedPassengers(new Set());
+        setSyncingMatchKeys(new Set());
+        setLocalManualCountDelta(0);
+        setLocalAutoCountDelta(0);
+        setManualMatchedScans([]);
+        setUniversalSearchQuery('');
         // Reset sync status for new flight
         setSyncStatus('idle');
         setLastUpdatedUtc(null);
@@ -1376,6 +1541,11 @@ export default function MobileScanner() {
     }
   }, [activityPage, activityStatusFilter, currentView, fetchActivityFeed]);
 
+  useEffect(() => {
+    if (currentView !== 'camera') return;
+    fetchManualMatchedScans();
+  }, [currentView, fetchManualMatchedScans]);
+
   // Reset to page 1 when status filter changes
   useEffect(() => {
     if (activityStatusFilter !== 'all') {
@@ -1459,7 +1629,6 @@ export default function MobileScanner() {
     }
 
     try {
-      setIsLoading(true);
       setScanStatus('loading');
 
       // Convert file to blob
@@ -1497,8 +1666,8 @@ export default function MobileScanner() {
         };
 
         // If matched, add to scanned passengers
-        if (matchResult.matched && matchResult.matchKey) {
-          setScannedPassengers(prev => new Set([...prev, matchResult.matchKey!]));
+        if (matchResult.matched && matchResult.passenger?.id) {
+          persistAutoMatchedPassenger(matchResult.passenger);
         }
 
         // Add to recent scans (save all scans, no limit)
@@ -1534,8 +1703,6 @@ export default function MobileScanner() {
       setTimeout(() => {
         setScanStatus(null);
       }, 2000);
-    } finally {
-      setIsLoading(false);
     }
   };
 
@@ -1595,6 +1762,17 @@ export default function MobileScanner() {
     return { matched: false };
   };
 
+  const persistAutoMatchedPassenger = useCallback((passenger: any) => {
+    if (!passenger?.id) return;
+
+    const { accepted, matchKey } = markPassengerOptimistic(passenger, 'auto');
+    if (!accepted || !matchKey) {
+      return;
+    }
+
+    void persistMatchInBackground(passenger, matchKey, 'auto');
+  }, [markPassengerOptimistic, persistMatchInBackground]);
+
   // Play capture sound
   const playCaptureSound = useCallback(() => {
     try {
@@ -1603,35 +1781,42 @@ export default function MobileScanner() {
         return;
       }
 
-      const audioContext = new AudioContextClass();
+      if (!audioContextRef.current) {
+        audioContextRef.current = new AudioContextClass();
+      }
+      const audioContext = audioContextRef.current;
       
       // Resume audio context if suspended (required by some browsers)
       if (audioContext.state === 'suspended') {
-        audioContext.resume();
+        void audioContext.resume();
       }
 
-      const oscillator = audioContext.createOscillator();
       const gainNode = audioContext.createGain();
-
-      oscillator.connect(gainNode);
       gainNode.connect(audioContext.destination);
-
-      // Set a louder beep sound (1000Hz for 150ms)
-      oscillator.frequency.value = 1000;
-      oscillator.type = 'sine';
-
-      // Higher volume with smooth fade out
       const now = audioContext.currentTime;
-      gainNode.gain.setValueAtTime(0.8, now);
-      gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.15);
+      gainNode.gain.setValueAtTime(0.0001, now);
 
-      oscillator.start(now);
-      oscillator.stop(now + 0.15);
+      const pulses = [
+        { start: 0, frequency: 1050, duration: 0.08, peak: 0.65 },
+        { start: 0.1, frequency: 1300, duration: 0.08, peak: 0.6 },
+        { start: 0.22, frequency: 900, duration: 0.06, peak: 0.45 },
+      ];
 
-      // Clean up after sound finishes
-      oscillator.onended = () => {
-        audioContext.close();
-      };
+      pulses.forEach((pulse) => {
+        const oscillator = audioContext.createOscillator();
+        oscillator.type = 'sine';
+        oscillator.frequency.value = pulse.frequency;
+        oscillator.connect(gainNode);
+
+        const startAt = now + pulse.start;
+        const endAt = startAt + pulse.duration;
+        gainNode.gain.setValueAtTime(0.0001, startAt);
+        gainNode.gain.linearRampToValueAtTime(pulse.peak, startAt + 0.01);
+        gainNode.gain.exponentialRampToValueAtTime(0.0001, endAt);
+
+        oscillator.start(startAt);
+        oscillator.stop(endAt);
+      });
     } catch (error) {
       // Silently fail if audio cannot be played
       console.log('Could not play capture sound:', error);
@@ -1681,6 +1866,7 @@ export default function MobileScanner() {
 
       // Draw current video frame to canvas
       ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
+      enhanceScanCanvas(canvas, ctx);
 
       // Convert canvas to blob
       canvas.toBlob(async (blob) => {
@@ -1690,7 +1876,6 @@ export default function MobileScanner() {
         }
 
         try {
-          setIsLoading(true);
           setScanStatus('loading');
 
           // Send to API (don't save yet)
@@ -1738,8 +1923,8 @@ export default function MobileScanner() {
             };
 
             // If matched, add to scanned passengers
-            if (matchResult.matched && matchResult.matchKey) {
-              setScannedPassengers(prev => new Set([...prev, matchResult.matchKey!]));
+            if (matchResult.matched && matchResult.passenger?.id) {
+              persistAutoMatchedPassenger(matchResult.passenger);
             }
 
             // Add to recent scans (save all scans, no limit)
@@ -1786,10 +1971,8 @@ export default function MobileScanner() {
             //   addNotification('info', 'Ready for next scan', 'Camera ready to capture again');
             // }
           }, 2000);
-        } finally {
-          setIsLoading(false);
         }
-      }, 'image/jpeg', 0.9);
+      }, 'image/jpeg', 0.95);
 
     } catch (error) {
       console.error('Error capturing and scanning:', error);
@@ -2150,13 +2333,13 @@ export default function MobileScanner() {
                             {flightDetails.manualScannedCount !== undefined && (
                               <div>
                                 <p className="text-xs text-gray-500 mb-0.5">Manual</p>
-                                <p className="text-sm font-semibold text-blue-600">{flightDetails.manualScannedCount}</p>
+                                <p className="text-sm font-semibold text-blue-600">{displayManualCount}</p>
                               </div>
                             )}
                             {flightDetails.autoScannedCount !== undefined && (
                               <div>
                                 <p className="text-xs text-gray-500 mb-0.5">Auto</p>
-                                <p className="text-sm font-semibold text-green-600">{flightDetails.autoScannedCount}</p>
+                                <p className="text-sm font-semibold text-green-600">{displayAutoCount}</p>
                               </div>
                             )}
                           </div>
@@ -2199,6 +2382,27 @@ export default function MobileScanner() {
                         </svg>
                       </button>
                     )}
+                  </div>
+
+                  <div className="mt-3 pt-3 border-t border-gray-200">
+                    <label htmlFor="universal-passenger-search" className="block text-xs font-semibold text-gray-700 mb-2">
+                      Universal Search
+                    </label>
+                    <div className="relative">
+                      <div className="absolute left-3 top-1/2 transform -translate-y-1/2">
+                        <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                        </svg>
+                      </div>
+                      <input
+                        id="universal-passenger-search"
+                        type="text"
+                        value={universalSearchQuery}
+                        onChange={(e) => setUniversalSearchQuery(e.target.value)}
+                        placeholder="Search by PNR, name, or seat"
+                        className="w-full pl-10 pr-3 py-2 bg-white border border-gray-300 rounded-lg text-gray-700 text-sm placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#00A651] focus:border-transparent"
+                      />
+                    </div>
                   </div>
 
                   {/* Passenger Type Summaries */}
@@ -2245,11 +2449,7 @@ export default function MobileScanner() {
                     <div className="mt-3 pt-3 border-t border-gray-200">
                       <p className="text-xs font-semibold text-gray-700 mb-2">Remaining Passengers:</p>
                       <div className="space-y-2 max-h-48 overflow-y-auto">
-                        {flightDetails.disembarkingPassengers
-                          ?.filter((p: any) => {
-                            const matchKey = `${p.pnrLocator || ''}_${p.seat || ''}`.toUpperCase();
-                            return !scannedPassengers.has(matchKey);
-                          })
+                        {filteredRemainingPassengers
                           .map((passenger: any, index: number) => (
                             <div key={index} className="bg-white rounded p-3 border border-gray-200">
                               <div className="flex items-center justify-between">
@@ -2264,8 +2464,11 @@ export default function MobileScanner() {
                                 </div>
                               </div>
                             </div>
-                          )) || (
-                            <p className="text-sm text-gray-500 text-center py-2">No remaining passengers data available</p>
+                          ))}
+                        {filteredRemainingPassengers.length === 0 && (
+                          <p className="text-sm text-gray-500 text-center py-2">
+                            {universalSearchQuery ? 'No remaining passengers match your search' : 'No remaining passengers data available'}
+                          </p>
                           )}
                       </div>
                     </div>
@@ -2577,7 +2780,7 @@ export default function MobileScanner() {
                 </div>
 
                 {/* Key Metrics Cards */}
-                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="grid grid-cols-2 xl:grid-cols-6 gap-4">
                   {/* Total Passengers */}
                   <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
                     <div className="flex items-center justify-between mb-2">
@@ -2616,6 +2819,30 @@ export default function MobileScanner() {
                     </p>
                   </div>
 
+                  {/* Manual Matched */}
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs text-blue-700 uppercase font-semibold">Manual Matched</span>
+                      <svg className="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
+                      </svg>
+                    </div>
+                    <p className="text-3xl font-bold text-blue-700 mb-1">{displayManualCount}</p>
+                    <p className="text-xs text-blue-600">Manual clicks saved in background</p>
+                  </div>
+
+                  {/* Auto Matched */}
+                  <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs text-green-700 uppercase font-semibold">Auto Matched</span>
+                      <svg className="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                    </div>
+                    <p className="text-3xl font-bold text-green-700 mb-1">{displayAutoCount}</p>
+                    <p className="text-xs text-green-600">Camera + barcode matches</p>
+                  </div>
+
                   {/* Remaining */}
                   <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
                     <div className="flex items-center justify-between mb-2">
@@ -2627,9 +2854,53 @@ export default function MobileScanner() {
                     <p className="text-3xl font-bold text-gray-700 mb-1">{Math.max(0, flightDetails.disembarkingPassengerCount - scannedPassengers.size)}</p>
                     <p className="text-xs text-gray-500 flex items-center gap-1">
                       <span className="w-2 h-2 bg-orange-500 rounded-full"></span>
-                      Awaiting scan
+                      Awaiting scan{syncingMatchKeys.size > 0 ? ` • Syncing ${syncingMatchKeys.size}` : ''}
                     </p>
                   </div>
+                </div>
+
+                {/* Manual Matched Feed */}
+                <div className="bg-blue-50 rounded-lg p-4 border border-blue-200">
+                  <div className="flex items-center justify-between mb-3">
+                    <div>
+                      <h3 className="text-sm font-semibold text-blue-900">Manual Matched & Scanned</h3>
+                      <p className="text-xs text-blue-700">Loaded from manual matched scan API</p>
+                    </div>
+                    <span className="px-2.5 py-1 rounded-full bg-blue-100 text-blue-700 text-xs font-semibold">
+                      {manualMatchedScans.length}
+                    </span>
+                  </div>
+
+                  {isLoadingManualMatchedScans ? (
+                    <div className="text-sm text-blue-700">Loading manual matched scans...</div>
+                  ) : manualMatchedScans.length === 0 ? (
+                    <div className="text-sm text-blue-700">No manually matched scans yet.</div>
+                  ) : (
+                    <div className="space-y-2 max-h-40 overflow-y-auto">
+                      {manualMatchedScans.slice(0, 8).map((scan: any, index: number) => {
+                        const passengerName = scan.passengerName || scan.matchedPassengerName || scan.name || 'Unknown';
+                        const pnr = scan.pnrLocator || scan.pnr || 'N/A';
+                        const seat = scan.seat || scan.matchedPassengerSeat || 'N/A';
+                        const scannedBy = scan.scannedBy || scan.userName || 'Unknown';
+                        const scannedAt = scan.scannedAt ? new Date(scan.scannedAt).toLocaleTimeString() : 'N/A';
+
+                        return (
+                          <div key={scan.scanEventId || scan.id || `${scan.passengerId}-${index}`} className="bg-white rounded border border-blue-100 p-2.5">
+                            <div className="flex items-center justify-between gap-3">
+                              <div>
+                                <p className="text-sm font-semibold text-gray-900">{passengerName}</p>
+                                <p className="text-xs text-gray-600">PNR: {pnr} • Seat: {seat}</p>
+                              </div>
+                              <div className="text-right">
+                                <p className="text-xs font-medium text-blue-700">{scannedAt}</p>
+                                <p className="text-xs text-gray-500">{scannedBy}</p>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
 
                 {/* Recent Activity Feed */}
@@ -2651,9 +2922,9 @@ export default function MobileScanner() {
                       </div>
                       <input
                         type="text"
-                        placeholder="Name or PNR..."
-                        value={activitySearchQuery}
-                        onChange={(e) => setActivitySearchQuery(e.target.value)}
+                        placeholder="Name, PNR, or seat..."
+                        value={universalSearchQuery}
+                        onChange={(e) => setUniversalSearchQuery(e.target.value)}
                         className="w-full pl-10 pr-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#00A651] focus:border-transparent"
                       />
                     </div>
@@ -2733,13 +3004,18 @@ export default function MobileScanner() {
                                 const passengerName = passenger.passengerName || passenger.name || 'Unknown';
                                 const initials = passengerName.split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2) || 'NA';
                                 const colors = ['bg-blue-500', 'bg-purple-500', 'bg-orange-500', 'bg-green-500', 'bg-pink-500'];
-                                const isMatched = scannedPassengers.has(getMatchKey(passenger));
+                                const matchKey = getMatchKey(passenger);
+                                const isMatched = scannedPassengers.has(matchKey);
+                                const isSyncingMatch = syncingMatchKeys.has(matchKey);
+                                const isManualMatched = manualMatchedScans.some(
+                                  (scan: any) => String(scan?.passengerId || scan?.matchedPassengerId || '') === String(passenger?.id || '')
+                                );
                                 
                                 return (
                                   <tr
                                     key={passenger.id || index}
                                     onClick={() => handleDisembarkingRowClick(passenger)}
-                                    className={`border-b border-gray-700 transition-colors ${isMatched ? 'bg-gray-700/30 cursor-not-allowed' : 'hover:bg-gray-700/50 cursor-pointer'}`}
+                                    className={`border-b border-gray-700 transition-colors ${isMatched || isSyncingMatch ? 'bg-gray-700/30 cursor-not-allowed' : 'hover:bg-gray-700/50 cursor-pointer'}`}
                                     role="button"
                                     tabIndex={0}
                                     onKeyDown={(e) => {
@@ -2770,7 +3046,12 @@ export default function MobileScanner() {
                                       </div>
                                     </td>
                                     <td className="py-3 px-3">
-                                      {isMatched ? (
+                                      {isSyncingMatch ? (
+                                        <span className="flex items-center gap-1.5">
+                                          <span className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></span>
+                                          <span className="text-blue-400 text-sm">Syncing...</span>
+                                        </span>
+                                      ) : isMatched ? (
                                         <span className="flex items-center gap-1.5">
                                           <span className="w-2 h-2 bg-[#00A651] rounded-full"></span>
                                           <span className="text-[#00A651] text-sm">Matched</span>
@@ -2783,7 +3064,7 @@ export default function MobileScanner() {
                                       )}
                                     </td>
                                     <td className="py-3 px-3 text-gray-300 text-sm">
-                                      {isMatched ? 'Manual' : 'Not scanned'}
+                                      {isSyncingMatch ? 'Saving' : isMatched ? (isManualMatched ? 'Manual' : 'Auto') : 'Not scanned'}
                                     </td>
                                   </tr>
                                 );
@@ -2798,7 +3079,7 @@ export default function MobileScanner() {
                             <div className="flex items-center gap-2">
                               <button
                                 onClick={() => setActivityPage((prev) => Math.max(1, prev - 1))}
-                                disabled={activityPage === 1 || isLoading}
+                                disabled={activityPage === 1}
                                 className="px-3 py-1.5 text-sm bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-500 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
                               >
                                 Previous
@@ -2819,12 +3100,11 @@ export default function MobileScanner() {
                                     <button
                                       key={pageNum}
                                       onClick={() => setActivityPage(pageNum)}
-                                      disabled={isLoading}
                                       className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
                                         activityPage === pageNum
                                           ? 'bg-[#00A651] text-white'
                                           : 'bg-gray-700 hover:bg-gray-600 text-white'
-                                      } disabled:opacity-50 disabled:cursor-not-allowed`}
+                                      }`}
                                     >
                                       {pageNum}
                                     </button>
@@ -2833,7 +3113,7 @@ export default function MobileScanner() {
                               </div>
                               <button
                                 onClick={() => setActivityPage((prev) => Math.min(totalDisembarkingPages, prev + 1))}
-                                disabled={activityPage === totalDisembarkingPages || isLoading}
+                                disabled={activityPage === totalDisembarkingPages}
                                 className="px-3 py-1.5 text-sm bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-500 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
                               >
                                 Next
