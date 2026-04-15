@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
+import { fetchWithCert } from '@/lib/fetchWithCert';
 
 const BACKEND_API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL || 'https://alphaapi-et-transitpax.azurewebsites.net/api';
@@ -37,7 +38,7 @@ function filterHopByHopHeaders(headers: Headers) {
 }
 
 async function refreshTokens(refreshToken: string) {
-  const res = await fetch(`${BACKEND_API_BASE_URL}/Auth/refresh`, {
+  const res = await fetchWithCert(`${BACKEND_API_BASE_URL}/Auth/refresh`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ refreshToken }),
@@ -61,7 +62,7 @@ async function forward(req: Request, token: string, backendUrl: string) {
     init.body = buf.byteLength ? buf : undefined;
   }
 
-  return fetch(backendUrl, init);
+  return fetchWithCert(backendUrl, init);
 }
 
 async function handler(req: Request, context: { params: Promise<{ path: string[] }> }) {

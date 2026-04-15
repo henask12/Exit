@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { fetchWithCert } from '@/lib/fetchWithCert';
 
 const BACKEND_API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL || 'https://alphaapi-et-transitpax.azurewebsites.net/api';
@@ -19,7 +20,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Missing credentials' }, { status: 400 });
     }
 
-    const res = await fetch(`${BACKEND_API_BASE_URL}/Auth/login`, {
+    const res = await fetchWithCert(`${BACKEND_API_BASE_URL}/Auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ employeeId, password }),

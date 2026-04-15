@@ -90,6 +90,47 @@ export default function MobileScanner() {
     }).length;
   }, [recentScans]);
 
+  const getMatchKey = useCallback((passenger: any) => {
+    return `${passenger?.pnrLocator || ''}_${passenger?.seat || ''}`.toUpperCase();
+  }, []);
+
+  const disembarkingActivityRows = useMemo(() => {
+    const passengers = flightDetails?.disembarkingPassengers || [];
+    return passengers.filter((passenger: any) => {
+      if (activitySearchQuery) {
+        const query = activitySearchQuery.toLowerCase();
+        const name = (passenger.passengerName || passenger.name || '').toLowerCase();
+        const pnr = (passenger.pnrLocator || '').toLowerCase();
+        if (!name.includes(query) && !pnr.includes(query)) return false;
+      }
+      if (activityScanTypeFilter !== 'all') {
+        const isScanned = scannedPassengers.has(getMatchKey(passenger));
+        if (activityScanTypeFilter === 'manual' && !isScanned) return false;
+        if (activityScanTypeFilter === 'boarding-pass') return false;
+      }
+      if (activityStatusFilter !== 'all') {
+        const isScanned = scannedPassengers.has(getMatchKey(passenger));
+        if (activityStatusFilter === 'matched' && !isScanned) return false;
+        if ((activityStatusFilter === 'unmatched' || activityStatusFilter === 'disembarking') && isScanned) return false;
+      }
+      return true;
+    });
+  }, [
+    flightDetails?.disembarkingPassengers,
+    activitySearchQuery,
+    activityScanTypeFilter,
+    activityStatusFilter,
+    scannedPassengers,
+    getMatchKey,
+  ]);
+
+  const activityRowsPerPage = 10;
+  const totalDisembarkingPages = Math.max(1, Math.ceil(disembarkingActivityRows.length / activityRowsPerPage));
+  const paginatedDisembarkingRows = useMemo(() => {
+    const start = (activityPage - 1) * activityRowsPerPage;
+    return disembarkingActivityRows.slice(start, start + activityRowsPerPage);
+  }, [activityPage, disembarkingActivityRows]);
+
   // Get logged-in user's station (cookie session)
   useEffect(() => {
     let cancelled = false;
@@ -320,6 +361,16 @@ export default function MobileScanner() {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleDisembarkingRowClick = async (passenger: any) => {
+    const isAlreadyScanned = scannedPassengers.has(getMatchKey(passenger));
+    if (isAlreadyScanned || isLoading) {
+      return;
+    }
+
+    await handleManualMatch(passenger);
+    await fetchActivityFeed(activityPage);
   };
 
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -941,7 +992,8 @@ export default function MobileScanner() {
       // Example from API: NDJADDET 0938 344Y011A0001
       // Or: ADDFRAET 0706 345Y021A0001
       // Pattern: 3-letter origin, 3-letter dest, 2-letter airline, space, 3-4 digit flight, space, 3-digit julian date, class, seat (1-3 digits + letter), 4-digit sequence
-      const flightSegmentPattern = /([A-Z]{3})([A-Z]{3})([A-Z]{2})\s+(\d{3,4})\s+(\d{3})([YJFC])(\d{1,3})([A-Z])(\d{4})/g;
+      // Class code can be cabin/booking class (A/C/I/etc), so keep this broad.
+      const flightSegmentPattern = /([A-Z]{3})([A-Z]{3})([A-Z]{2})\s+(\d{3,4})\s+(\d{3})([A-Z])(\d{1,3})([A-Z])(\d{4})/g;
       const flightSegments: any[] = [];
       let match;
 
@@ -1082,7 +1134,7 @@ export default function MobileScanner() {
 
     try {
       setIsLoadingFlights(true);
-      const apiUrl = `https://alphaapi-et-transitpax.azurewebsites.net/api/Flight/numbers?station=${station}&flightDate=${flightDate}`;
+      const apiUrl = `/api/proxy/Flight/numbers?station=${station}&flightDate=${flightDate}`;
 
       const response = await fetch(apiUrl, {
         method: 'GET',
@@ -1331,6 +1383,12 @@ export default function MobileScanner() {
     }
   }, [activityStatusFilter]);
 
+  useEffect(() => {
+    if (activityPage > totalDisembarkingPages) {
+      setActivityPage(totalDisembarkingPages);
+    }
+  }, [activityPage, totalDisembarkingPages]);
+
   // Send image to API for scanning
   const scanBoardingPassAPI = async (imageBlob: Blob): Promise<any> => {
     try {
@@ -1338,7 +1396,7 @@ export default function MobileScanner() {
       const formData = new FormData();
       formData.append('file', imageBlob, 'boarding-pass.jpg');
 
-      const apiUrl = 'https://alphaapi-et-transitpax.azurewebsites.net/api/BoardingPass/scan';
+      const apiUrl = '/api/proxy/BoardingPass/scan';
 
       console.log('🌐 Making API request to:', apiUrl, {
         method: 'POST',
@@ -1351,7 +1409,6 @@ export default function MobileScanner() {
       const response = await fetch(apiUrl, {
         method: 'POST',
         body: formData,
-        // Note: CORS must be enabled on the API server
       });
 
       console.log('📡 API response status:', response.status, response.statusText);
@@ -1420,7 +1477,7 @@ export default function MobileScanner() {
         const boardingPassData = parseBoardingPass(decodedText);
 
         // Match with flight details
-        const matchResult = matchPassenger(boardingPassData);
+        const matchResult = matchPassenger(boardingPassData, apiResult);
 
         // Create scan result
         const scanData = {
@@ -1490,28 +1547,49 @@ export default function MobileScanner() {
   };
 
   // Match scanned passenger with flight details
-  const matchPassenger = (boardingPassData: any): { matched: boolean; passenger?: any; matchKey?: string } => {
+  const matchPassenger = (boardingPassData: any, apiResult?: any): { matched: boolean; passenger?: any; matchKey?: string } => {
     if (!flightDetails || !flightDetails.disembarkingPassengers) {
       return { matched: false };
     }
 
-    const pnr = boardingPassData.pnr?.toUpperCase();
-    const seat = boardingPassData.seat?.toUpperCase();
-    const passengerName = boardingPassData.passengerName?.toUpperCase();
+    const normalize = (value?: string) => (value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const pnr = normalize(boardingPassData.pnr);
+    const seat = normalize(boardingPassData.seat);
+    const passengerName = normalize(boardingPassData.passengerName);
+    const classCode = normalize(boardingPassData.class);
+    const classToPassengerType: Record<string, string> = { A: 'ADT', C: 'CHD', I: 'INF' };
 
-    // Try to match by PNR first, then seat, then name
+    // Prefer backend strict match if provided.
+    const backendMatchedPassenger = apiResult?.flightMatch?.matchedPassenger;
+    if (backendMatchedPassenger) {
+      const byId = flightDetails.disembarkingPassengers.find((p: any) => p.id === backendMatchedPassenger.id);
+      const resolvedPassenger = byId || backendMatchedPassenger;
+      return { matched: true, passenger: resolvedPassenger, matchKey: getMatchKey(resolvedPassenger) };
+    }
+
+    const strictCandidates: Array<{ passenger: any; matchKey: string }> = [];
     for (const passenger of flightDetails.disembarkingPassengers) {
-      const matchKey = `${passenger.pnrLocator || ''}_${passenger.seat || ''}`.toUpperCase();
+      const matchKey = getMatchKey(passenger);
+      const passengerPnr = normalize(passenger.pnrLocator);
+      const passengerSeat = normalize(passenger.seat);
+      const passengerNameNorm = normalize(passenger.passengerName || passenger.name);
+      const passengerTypeNorm = normalize(passenger.passengerType);
+      const typeMatches = !classCode || !classToPassengerType[classCode] || passengerTypeNorm === classToPassengerType[classCode];
 
-      if (pnr && passenger.pnrLocator?.toUpperCase() === pnr) {
+      if (pnr && passengerPnr === pnr && typeMatches) {
         return { matched: true, passenger, matchKey };
       }
-      if (seat && passenger.seat?.toUpperCase() === seat) {
+      if (passengerName && passengerNameNorm === passengerName && seat && passengerSeat === seat && typeMatches) {
         return { matched: true, passenger, matchKey };
       }
-      if (passengerName && passenger.passengerName?.toUpperCase().includes(passengerName)) {
-        return { matched: true, passenger, matchKey };
+      if (passengerName && passengerNameNorm === passengerName && typeMatches) {
+        strictCandidates.push({ passenger, matchKey });
       }
+    }
+
+    // Only accept name-only when unambiguous after strict filtering.
+    if (strictCandidates.length === 1) {
+      return { matched: true, passenger: strictCandidates[0].passenger, matchKey: strictCandidates[0].matchKey };
     }
 
     return { matched: false };
@@ -1538,17 +1616,17 @@ export default function MobileScanner() {
       oscillator.connect(gainNode);
       gainNode.connect(audioContext.destination);
 
-      // Set a pleasant beep sound (800Hz for 100ms)
-      oscillator.frequency.value = 800;
+      // Set a louder beep sound (1000Hz for 150ms)
+      oscillator.frequency.value = 1000;
       oscillator.type = 'sine';
 
-      // Fade out to avoid clicking sound
+      // Higher volume with smooth fade out
       const now = audioContext.currentTime;
-      gainNode.gain.setValueAtTime(0.3, now);
-      gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.1);
+      gainNode.gain.setValueAtTime(0.8, now);
+      gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.15);
 
       oscillator.start(now);
-      oscillator.stop(now + 0.1);
+      oscillator.stop(now + 0.15);
 
       // Clean up after sound finishes
       oscillator.onended = () => {
@@ -1641,7 +1719,7 @@ export default function MobileScanner() {
             const boardingPassData = parseBoardingPass(decodedText);
 
             // Match with flight details
-            const matchResult = matchPassenger(boardingPassData);
+            const matchResult = matchPassenger(boardingPassData, apiResult);
 
             // Create scan result
             const scanData = {
@@ -2053,7 +2131,7 @@ export default function MobileScanner() {
               <div className="mb-4 mt-2">
                 <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
                   <div className="flex items-center justify-between mb-3">
-                    <div className="flex items-center gap-4">
+                    <div className="flex items-center gap-4 flex-wrap">
                       <div>
                         <p className="text-xs text-gray-500 mb-0.5">Disembarking</p>
                         <p className="text-lg font-bold text-gray-900">{flightDetails.disembarkingPassengerCount}</p>
@@ -2065,6 +2143,50 @@ export default function MobileScanner() {
                           {scannedPassengers.size}
                         </p>
                       </div>
+                      {(flightDetails.manualScannedCount !== undefined || flightDetails.autoScannedCount !== undefined) && (
+                        <>
+                          <div className="w-px h-8 bg-gray-300"></div>
+                          <div className="flex items-center gap-3">
+                            {flightDetails.manualScannedCount !== undefined && (
+                              <div>
+                                <p className="text-xs text-gray-500 mb-0.5">Manual</p>
+                                <p className="text-sm font-semibold text-blue-600">{flightDetails.manualScannedCount}</p>
+                              </div>
+                            )}
+                            {flightDetails.autoScannedCount !== undefined && (
+                              <div>
+                                <p className="text-xs text-gray-500 mb-0.5">Auto</p>
+                                <p className="text-sm font-semibold text-green-600">{flightDetails.autoScannedCount}</p>
+                              </div>
+                            )}
+                          </div>
+                        </>
+                      )}
+                      {(flightDetails.adultCount !== undefined || flightDetails.childCount !== undefined || flightDetails.infantCount !== undefined) && (
+                        <>
+                          <div className="w-px h-8 bg-gray-300"></div>
+                          <div className="flex items-center gap-3">
+                            {flightDetails.adultCount !== undefined && (
+                              <div>
+                                <p className="text-xs text-gray-500 mb-0.5">Adults</p>
+                                <p className="text-sm font-semibold text-gray-700">{flightDetails.adultCount}</p>
+                              </div>
+                            )}
+                            {flightDetails.childCount !== undefined && (
+                              <div>
+                                <p className="text-xs text-gray-500 mb-0.5">Children</p>
+                                <p className="text-sm font-semibold text-gray-700">{flightDetails.childCount}</p>
+                              </div>
+                            )}
+                            {flightDetails.infantCount !== undefined && (
+                              <div>
+                                <p className="text-xs text-gray-500 mb-0.5">Infants</p>
+                                <p className="text-sm font-semibold text-gray-700">{flightDetails.infantCount}</p>
+                              </div>
+                            )}
+                          </div>
+                        </>
+                      )}
                     </div>
                     {flightDetails.disembarkingPassengerCount > scannedPassengers.size && (
                       <button
@@ -2078,6 +2200,45 @@ export default function MobileScanner() {
                       </button>
                     )}
                   </div>
+
+                  {/* Passenger Type Summaries */}
+                  {flightDetails.passengerTypeSummaries && flightDetails.passengerTypeSummaries.length > 0 && (
+                    <div className="mt-3 pt-3 border-t border-gray-200">
+                      <p className="text-xs font-semibold text-gray-700 mb-2">Passenger Type Breakdown:</p>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="text-xs text-gray-500 border-b border-gray-200">
+                              <th className="text-left py-1 px-2">Type</th>
+                              <th className="text-center py-1 px-2">Expected</th>
+                              <th className="text-center py-1 px-2">Manual</th>
+                              <th className="text-center py-1 px-2">Auto</th>
+                              <th className="text-center py-1 px-2">Total</th>
+                              <th className="text-center py-1 px-2">Remaining</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {flightDetails.passengerTypeSummaries.map((summary: any, index: number) => (
+                              <tr key={index} className="border-b border-gray-100 last:border-0">
+                                <td className="py-1 px-2 font-medium text-gray-700">
+                                  {summary.passengerType} <span className="text-xs text-gray-400">({summary.expectedClassCode})</span>
+                                </td>
+                                <td className="text-center py-1 px-2 text-gray-600">{summary.disembarkingCount}</td>
+                                <td className="text-center py-1 px-2 text-blue-600 font-medium">{summary.scannedManualCount}</td>
+                                <td className="text-center py-1 px-2 text-green-600 font-medium">{summary.scannedAutoCount}</td>
+                                <td className="text-center py-1 px-2 text-gray-800 font-semibold">{summary.scannedTotalCount}</td>
+                                <td className="text-center py-1 px-2">
+                                  <span className={`${summary.remainingCount === 0 ? 'text-green-600' : 'text-orange-600'} font-medium`}>
+                                    {summary.remainingCount}
+                                  </span>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
 
                   {/* Remaining Passengers List */}
                   {showRemainingPassengers && flightDetails.disembarkingPassengerCount > scannedPassengers.size && (
@@ -2513,6 +2674,7 @@ export default function MobileScanner() {
                       <option value="all">All Statuses</option>
                       <option value="matched">Matched</option>
                       <option value="unmatched">Unmatched</option>
+                      <option value="disembarking">Disembarking</option>
                     </select>
                     <div className="flex items-center gap-2">
                       <div className="flex-1 relative">
@@ -2554,46 +2716,39 @@ export default function MobileScanner() {
                       <div className="flex items-center justify-center py-12">
                         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#00A651]"></div>
                       </div>
-                    ) : activityData?.events && activityData.events.length > 0 ? (
+                    ) : disembarkingActivityRows.length > 0 ? (
                       <>
                         <table className="w-full">
                           <thead>
                             <tr className="border-b border-gray-700">
                               <th className="text-left py-2 px-3 text-xs font-semibold text-gray-400 uppercase">Passenger Name</th>
                               <th className="text-left py-2 px-3 text-xs font-semibold text-gray-400 uppercase">Flight</th>
-                              <th className="text-left py-2 px-3 text-xs font-semibold text-gray-400 uppercase">Scan Type</th>
+                              <th className="text-left py-2 px-3 text-xs font-semibold text-gray-400 uppercase">Seat / PNR</th>
                               <th className="text-left py-2 px-3 text-xs font-semibold text-gray-400 uppercase">Status</th>
-                              <th className="text-left py-2 px-3 text-xs font-semibold text-gray-400 uppercase">Scanned At</th>
-                              <th className="text-left py-2 px-3 text-xs font-semibold text-gray-400 uppercase">Time Ago</th>
+                              <th className="text-left py-2 px-3 text-xs font-semibold text-gray-400 uppercase">Type</th>
                             </tr>
                           </thead>
                           <tbody>
-                            {activityData.events
-                              .filter((event: any) => {
-                                // Client-side search filter (name)
-                                if (activitySearchQuery) {
-                                  const query = activitySearchQuery.toLowerCase();
-                                  const nameMatch = (event.passengerName || '').toLowerCase().includes(query);
-                                  if (!nameMatch) return false;
-                                }
-                                
-                                // Client-side scan type filter
-                                if (activityScanTypeFilter !== 'all') {
-                                  const scanType = (event.scanType || '').toLowerCase();
-                                  if (activityScanTypeFilter === 'manual' && scanType !== 'manual') return false;
-                                  if (activityScanTypeFilter === 'boarding-pass' && scanType !== 'barcode' && scanType !== 'boarding pass') return false;
-                                }
-                                
-                                return true;
-                              })
-                              .map((event: any, index: number) => {
-                                const passengerName = event.passengerName || 'Unknown';
+                            {paginatedDisembarkingRows.map((passenger: any, index: number) => {
+                                const passengerName = passenger.passengerName || passenger.name || 'Unknown';
                                 const initials = passengerName.split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2) || 'NA';
                                 const colors = ['bg-blue-500', 'bg-purple-500', 'bg-orange-500', 'bg-green-500', 'bg-pink-500'];
-                                const isMatched = event.matched === true || event.alertStatus === 'matched';
+                                const isMatched = scannedPassengers.has(getMatchKey(passenger));
                                 
                                 return (
-                                  <tr key={event.id || index} className="border-b border-gray-700 hover:bg-gray-700/50 transition-colors">
+                                  <tr
+                                    key={passenger.id || index}
+                                    onClick={() => handleDisembarkingRowClick(passenger)}
+                                    className={`border-b border-gray-700 transition-colors ${isMatched ? 'bg-gray-700/30 cursor-not-allowed' : 'hover:bg-gray-700/50 cursor-pointer'}`}
+                                    role="button"
+                                    tabIndex={0}
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Enter' || e.key === ' ') {
+                                        e.preventDefault();
+                                        handleDisembarkingRowClick(passenger);
+                                      }
+                                    }}
+                                  >
                                     <td className="py-3 px-3">
                                       <div className="flex items-center gap-2">
                                         <div className={`w-8 h-8 ${colors[index % colors.length]} rounded-full flex items-center justify-center text-white text-xs font-semibold`}>
@@ -2604,35 +2759,15 @@ export default function MobileScanner() {
                                     </td>
                                     <td className="py-3 px-3 text-gray-300 text-sm">
                                       <div className="flex flex-col">
-                                        <span className="font-semibold">ET-{event.flightNumber}</span>
-                                        <span className="text-xs text-gray-400">{event.route || 'N/A'}</span>
+                                        <span className="font-semibold">ET-{flightDetails.flightNumber}</span>
+                                        <span className="text-xs text-gray-400">{formattedRoute || 'N/A'}</span>
                                       </div>
                                     </td>
                                     <td className="py-3 px-3">
-                                      <span className="text-gray-300 text-sm flex items-center gap-1">
-                                        {event.scanType === 'Barcode' || event.scanType === 'barcode' ? (
-                                          <>
-                                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                                            </svg>
-                                            Boarding Pass
-                                          </>
-                                        ) : event.scanType === 'Manual' || event.scanType === 'manual' ? (
-                                          <>
-                                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                                            </svg>
-                                            Manual
-                                          </>
-                                        ) : (
-                                          <>
-                                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V8a2 2 0 00-2-2h-5m-4 0V5a2 2 0 114 0v1m-4 0a2 2 0 104 0m-5 8a2 2 0 100-4 2 2 0 000 4zm0 0c1.306 0 2.417.835 2.83 2M9 14a3.001 3.001 0 00-2.83 2M15 11h3m-3 4h2" />
-                                            </svg>
-                                            {event.scanType || 'Unknown'}
-                                          </>
-                                        )}
-                                      </span>
+                                      <div className="text-gray-300 text-sm">
+                                        <div>Seat: {passenger.seat || 'N/A'}</div>
+                                        <div className="text-xs text-gray-400">PNR: {passenger.pnrLocator || 'N/A'}</div>
+                                      </div>
                                     </td>
                                     <td className="py-3 px-3">
                                       {isMatched ? (
@@ -2643,50 +2778,40 @@ export default function MobileScanner() {
                                       ) : (
                                         <span className="flex items-center gap-1.5">
                                           <span className="w-2 h-2 bg-orange-500 rounded-full"></span>
-                                          <span className="text-orange-500 text-sm">Unmatched</span>
+                                          <span className="text-orange-500 text-sm">Pending (click to manual scan)</span>
                                         </span>
                                       )}
                                     </td>
                                     <td className="py-3 px-3 text-gray-300 text-sm">
-                                      {event.scannedAt ? new Date(event.scannedAt).toLocaleString([], { 
-                                        month: 'short', 
-                                        day: 'numeric', 
-                                        hour: '2-digit', 
-                                        minute: '2-digit' 
-                                      }) : 'N/A'}
-                                    </td>
-                                    <td className="py-3 px-3 text-gray-400 text-sm">
-                                      {event.timeAgo || 'N/A'}
+                                      {isMatched ? 'Manual' : 'Not scanned'}
                                     </td>
                                   </tr>
                                 );
                               })}
                           </tbody>
                         </table>
-                        
-                        {/* Pagination */}
-                        {activityData.totalPages > 1 && (
+                        {disembarkingActivityRows.length > activityRowsPerPage && (
                           <div className="flex items-center justify-between mt-4 pt-4 border-t border-gray-700">
                             <div className="text-sm text-gray-400">
-                              Showing {((activityPage - 1) * 8) + 1} to {Math.min(activityPage * 8, activityData.totalCount)} of {activityData.totalCount} events
+                              Showing {((activityPage - 1) * activityRowsPerPage) + 1} to {Math.min(activityPage * activityRowsPerPage, disembarkingActivityRows.length)} of {disembarkingActivityRows.length} passengers
                             </div>
                             <div className="flex items-center gap-2">
                               <button
-                                onClick={() => setActivityPage(prev => Math.max(1, prev - 1))}
-                                disabled={!activityData.hasPreviousPage || isLoadingActivity}
+                                onClick={() => setActivityPage((prev) => Math.max(1, prev - 1))}
+                                disabled={activityPage === 1 || isLoading}
                                 className="px-3 py-1.5 text-sm bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-500 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
                               >
                                 Previous
                               </button>
                               <div className="flex items-center gap-1">
-                                {Array.from({ length: Math.min(5, activityData.totalPages) }, (_, i) => {
+                                {Array.from({ length: Math.min(5, totalDisembarkingPages) }, (_, i) => {
                                   let pageNum;
-                                  if (activityData.totalPages <= 5) {
+                                  if (totalDisembarkingPages <= 5) {
                                     pageNum = i + 1;
                                   } else if (activityPage <= 3) {
                                     pageNum = i + 1;
-                                  } else if (activityPage >= activityData.totalPages - 2) {
-                                    pageNum = activityData.totalPages - 4 + i;
+                                  } else if (activityPage >= totalDisembarkingPages - 2) {
+                                    pageNum = totalDisembarkingPages - 4 + i;
                                   } else {
                                     pageNum = activityPage - 2 + i;
                                   }
@@ -2694,7 +2819,7 @@ export default function MobileScanner() {
                                     <button
                                       key={pageNum}
                                       onClick={() => setActivityPage(pageNum)}
-                                      disabled={isLoadingActivity}
+                                      disabled={isLoading}
                                       className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
                                         activityPage === pageNum
                                           ? 'bg-[#00A651] text-white'
@@ -2707,8 +2832,8 @@ export default function MobileScanner() {
                                 })}
                               </div>
                               <button
-                                onClick={() => setActivityPage(prev => prev + 1)}
-                                disabled={!activityData.hasNextPage || isLoadingActivity}
+                                onClick={() => setActivityPage((prev) => Math.min(totalDisembarkingPages, prev + 1))}
+                                disabled={activityPage === totalDisembarkingPages || isLoading}
                                 className="px-3 py-1.5 text-sm bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-500 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
                               >
                                 Next
